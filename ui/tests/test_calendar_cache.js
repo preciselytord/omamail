@@ -51,10 +51,15 @@ console.log("test_calendar_cache.js ok")
 {
   // A range names the calendars it was refreshed for and those that failed.
   const recorded = cache.putRange(cache.emptyStore(), "", 0, 1000, [first], 40,
-    [first.sourceId, second.sourceId], [second.sourceId])
+    [first.sourceId, second.sourceId, "caldav:never-fetched"], [second.sourceId], [first.sourceId, second.sourceId])
   const range = recorded.ranges[cache.rangeKey("", 0, 1000)]
   assert.deepStrictEqual(JSON.parse(JSON.stringify(range.sourceIds)), [first.sourceId, second.sourceId])
   assert.deepStrictEqual(JSON.parse(JSON.stringify(range.failedSourceIds)), [second.sourceId])
+  assert.strictEqual(range.truncated, false)
+  const many = []
+  for (let i = 0; i < 2501; i++) many.push({ uid: "e" + i, sourceId: first.sourceId, start: { ms: i }, end: { ms: i + 1 } })
+  const cut = cache.putRange(cache.emptyStore(), "", 0, 3000, many, 50, [first.sourceId], [], [first.sourceId])
+  assert.strictEqual(cut.ranges[cache.rangeKey("", 0, 3000)].truncated, true, "a range cut at the limit says so")
   const legacy = cache.putRange(cache.emptyStore(), "", 0, 1000, [first], 40)
   assert.strictEqual(legacy.ranges[cache.rangeKey("", 0, 1000)].sourceIds, undefined,
     "a range written without a source list claims none")

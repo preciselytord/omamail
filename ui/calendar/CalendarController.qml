@@ -40,7 +40,9 @@ Item {
   // switch a cache miss: the calendar blanked and every account's calendars
   // were fetched again to redraw what was already on screen.
   property string refreshScope: ""
-  // Calendars whose events failed to load in the current refresh.
+  // The calendars the current refresh asked for, fixed when it starts, and
+  // those whose events failed to load: what the cached range can vouch for.
+  property var refreshSourceIds: []
   property var failedSourceIds: []
   property var queue: []
   property var activeSource: null
@@ -220,6 +222,7 @@ Item {
       return root.sourceIncluded(source)
     })
     var sourceIds = queue.map(function(source) { return String(source.id || "") })
+    refreshSourceIds = sourceIds
     loading = true
     setEvents(eventCache.get(refreshScope, rangeStart, rangeEnd, sourceIds))
     processNext()
@@ -1097,7 +1100,7 @@ Item {
       if (rangeStart && rangeEnd && refreshScope === calendarScope)
         eventCache.put(refreshScope, rangeStart, rangeEnd, events,
           contextSources.sources.filter(function(source) { return root.sourceIncluded(source) }).map(function(source) { return String(source.id) }),
-          failedSourceIds)
+          failedSourceIds, refreshSourceIds)
       var nextStart = pendingRangeStart
       var nextEnd = pendingRangeEnd
       pendingRangeStart = 0

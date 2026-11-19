@@ -115,12 +115,12 @@ fn normalize_calendar(value: &Value) -> Value {
             if !entry.is_object() {
                 continue;
             }
-            entry["events"] = json!(
-                entry["events"]
-                    .as_array()
-                    .map(|v| v.iter().take(2500).cloned().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            );
+            let events = entry["events"].as_array().cloned().unwrap_or_default();
+            if events.len() > 2500 {
+                // Readers that judge coverage must know events were dropped.
+                entry["truncated"] = json!(true);
+            }
+            entry["events"] = json!(events.into_iter().take(2500).collect::<Vec<_>>());
             out["ranges"][key] = entry;
         }
     }

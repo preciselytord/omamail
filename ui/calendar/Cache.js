@@ -58,14 +58,16 @@ function eventsFor(store, scope, startMs, endMs, enabledSourceIds) {
   return out
 }
 
-// A range records the calendars its refresh asked for and those that failed,
-// so a reader can tell a complete range from one missing a calendar (one
-// that failed, or was turned on after the range was cached).
+// A range records the calendars its refresh fetched and those that failed,
+// and whether it was cut at MAX_EVENTS, so a reader can tell a complete
+// range from one missing a calendar (one that failed, or was turned on after
+// the range was cached) or some of its events. `refreshedSourceIds` keeps
+// its old meaning: the calendars whose old events this refresh replaces.
 function sourceList(ids) {
   return Array.isArray(ids) ? ids.map(function(id) { return String(id || "") }).filter(function(id) { return id !== "" }) : []
 }
 
-function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds) {
+function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds, fetchedSourceIds) {
   var source = store && isObject(store.ranges) ? store.ranges : {}
   var ranges = {}
   for (var key in source) ranges[key] = source[key]
@@ -82,9 +84,11 @@ function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceId
     at: Number(nowMs) || 0,
     events: kept.slice(0, MAX_EVENTS)
   }
-  if (Array.isArray(refreshedSourceIds)) {
-    ranges[rangeKey(scope, startMs, endMs)].sourceIds = sourceList(refreshedSourceIds)
-    ranges[rangeKey(scope, startMs, endMs)].failedSourceIds = sourceList(failedSourceIds)
+  if (Array.isArray(fetchedSourceIds)) {
+    var range = ranges[rangeKey(scope, startMs, endMs)]
+    range.sourceIds = sourceList(fetchedSourceIds)
+    range.failedSourceIds = sourceList(failedSourceIds)
+    range.truncated = kept.length > MAX_EVENTS
   }
   var keys = Object.keys(ranges)
   keys.sort(function(a, b) { return Number(ranges[b].at) - Number(ranges[a].at) })

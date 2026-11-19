@@ -808,6 +808,31 @@ Item {
       cache.loaded = false
     }
 
+    // The cached range names what it can vouch for: the calendars this
+    // refresh asked for, and which of them failed.
+    function test_a_cached_range_records_the_calendars_it_fetched_and_those_that_failed() {
+      controller.accountId = "imap:work@example.com"
+      var cache = null
+      for (var i = 0; i < controller.children.length; i++) {
+        if (controller.children[i].cacheName !== undefined) cache = controller.children[i]
+      }
+      cache.loaded = true
+      mailService.nextError = "refused"
+      controller.refresh(5000, 6000)
+      var range = cache.store.ranges[controller.calendarScope + "\n5000:6000"]
+      verify(range !== undefined, "the refresh cached its range")
+      compare(JSON.stringify(range.sourceIds), JSON.stringify(["caldav:team"]))
+      compare(JSON.stringify(range.failedSourceIds), JSON.stringify(["caldav:team"]))
+      mailService.nextError = null
+      mailService.nextResult = ({ body: "", status: 200 })
+      controller.refresh(5000, 6000)
+      range = cache.store.ranges[controller.calendarScope + "\n5000:6000"]
+      compare(JSON.stringify(range.failedSourceIds), "[]", "a later refresh starts with no failures")
+      compare(JSON.stringify(range.sourceIds), JSON.stringify(["caldav:team"]))
+      mailService.nextResult = ({ body: "{}", status: 200 })
+      cache.loaded = false
+    }
+
     // The sources file is watched, and its directory is touched by the
     // backend on every registry read. Learning again that the file is still
     // absent is not a change of sources: announcing one refreshed every

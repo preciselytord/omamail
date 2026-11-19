@@ -829,8 +829,19 @@ Item {
       range = cache.store.ranges[controller.calendarScope + "\n5000:6000"]
       compare(JSON.stringify(range.failedSourceIds), "[]", "a later refresh starts with no failures")
       compare(JSON.stringify(range.sourceIds), JSON.stringify(["caldav:team"]))
+      // Leave nothing behind for later tests in this process: no error, no
+      // cached range, no pending save.
       mailService.nextResult = ({ body: "{}", status: 200 })
       cache.loaded = false
+      cache.store = ({ version: 3, ranges: {} })
+      controller.lastError = ""
+      controller.lastErrorKind = ""
+      controller.failedSourceIds = []
+      controller.refreshSourceIds = []
+      controller.rangeStart = 0
+      controller.rangeEnd = 0
+      mailService.requests = []
+      wait(900)
     }
 
     // The sources file is watched, and its directory is touched by the

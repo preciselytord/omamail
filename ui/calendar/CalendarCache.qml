@@ -27,8 +27,18 @@ Item {
   }
 
   function recordInUse(sources) {
+    var before = store.calendars
     store = Cache.withCalendars(store, sources, Date.now())
-    if (loaded) saveTimer.restart()
+    if (!loaded || store.calendars === before) return
+    // A calendar leaving the list must stop being read at once, not after
+    // the debounce; anything else can wait for it.
+    var gone = before && Array.isArray(before.inUse) && before.inUse.some(function(old) {
+      return !store.calendars.inUse.some(function(now) { return now.id === old.id })
+    })
+    if (gone || store.calendars.overflow === true) {
+      saveTimer.stop()
+      saveTimer.triggered()
+    } else saveTimer.restart()
   }
 
   function restore() {

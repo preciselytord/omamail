@@ -44,6 +44,9 @@ function makeSource(raw) {
     id: id, kind: kind, name: trimmed(value.name),
     url: trimmed(value.url), username: trimmed(value.username),
     accountId: trimmed(value.accountId), enabled: value.enabled !== false,
+    // When the calendar was last switched on: a cached range from before it
+    // holds nothing current of it (read by the assistant's calendar reader).
+    enabledAt: Math.max(0, Math.floor(Number(value.enabledAt) || 0)),
     calendarId: trimmed(value.calendarId),
     readOnly: value.readOnly === true, discovered: value.discovered === true,
     colorKey: colorKey,
@@ -96,6 +99,7 @@ function setEnabled(list, id, enabled) {
   for (var i = 0; i < next.sources.length; i++) {
     if (!next.sources[i] || next.sources[i].id !== wanted) continue
     var changed = makeSource(next.sources[i])
+    if (enabled !== false && changed.enabled !== true) changed.enabledAt = Date.now()
     changed.enabled = enabled !== false
     next.sources[i] = changed
     break
@@ -189,6 +193,7 @@ function withGoogleAccounts(list, accountSummaries) {
       name: trimmed(account.email || account.label || "Google Calendar"),
       accountId: accountId,
       enabled: saved ? saved.enabled !== false : true,
+      enabledAt: saved ? Math.max(0, Math.floor(Number(saved.enabledAt) || 0)) : 0,
       // A Google calendar accepts writes through the API. Older versions
       // persisted readOnly on these synthesized sources, so it must not be
       // inherited: keeping the stamp would hide Edit and Delete after an
@@ -234,6 +239,7 @@ function withMicrosoftAccounts(list, accountSummaries) {
         ? trimmed(saved.name) : trimmed(account.email || account.label || "Microsoft Calendar"),
       accountId: accountId,
       enabled: saved ? saved.enabled !== false : true,
+      enabledAt: saved ? Math.max(0, Math.floor(Number(saved.enabledAt) || 0)) : 0,
       calendarId: saved ? trimmed(saved.calendarId) : "",
       readOnly: saved && saved.discovered === true ? saved.readOnly === true : false,
       discovered: saved ? saved.discovered === true : false,
@@ -330,6 +336,7 @@ function applyDiscovery(list, result) {
       accountId: accountId, calendarId: remote.calendarId,
       url: remote.url, username: remote.username,
       enabled: saved ? saved.enabled !== false : initial,
+      enabledAt: saved ? saved.enabledAt : 0,
       readOnly: remote.readOnly === true, discovered: true,
       colorKey: saved ? saved.colorKey : Palette.defaultKey(id),
       accessRole: remote.accessRole, timeZone: remote.timeZone,

@@ -477,7 +477,7 @@ fn calendar_cache_keeps_the_calendars_in_use_and_marks_cut_ranges() {
     .unwrap();
     assert_eq!(
         read["calendars"],
-        json!({"at":3.0,"inUse":[{"id":"caldav:a","name":"Home"}]})
+        json!({"at":3.0,"inUse":[{"id":"caldav:a","name":"Home","enabledAt":0.0}]})
     );
     let range = &read["ranges"]["\n1:2"];
     assert_eq!(range["events"].as_array().unwrap().len(), 2500);

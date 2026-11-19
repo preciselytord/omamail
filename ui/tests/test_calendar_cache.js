@@ -72,21 +72,24 @@ console.log("test_calendar_cache.js ok")
     { id: "google:me@example.com", name: "me@example.com" }]
   const written = cache.putRange(cache.emptyStore(), "", 0, 1000, [], 60, [], [], [], sources)
   assert.deepStrictEqual(JSON.parse(JSON.stringify(written.calendars)), { at: 60, inUse: [
-    { id: "caldav:a", name: "Home" }, { id: "google:me@example.com", name: "me@example.com" }] })
+    { id: "caldav:a", name: "Home", enabledAt: 0 }, { id: "google:me@example.com", name: "me@example.com", enabledAt: 0 }] })
   const kept = cache.putRange(written, "", 1000, 2000, [], 70)
   assert.strictEqual(kept.calendars.at, 60, "a write with no list keeps the last one")
 }
 
 {
-  // A calendar back in use is struck from every cached range; others stay.
+  // The list records when each calendar was switched on; an unchanged list
+  // keeps its record, so a restore rewrites nothing.
   let store = cache.putRange(cache.emptyStore(), "", 0, 1000, [], 10, [], [], ["caldav:a", "caldav:b"],
-    [{ id: "caldav:a", name: "A" }, { id: "caldav:b", name: "B" }])
-  store = cache.withCalendars(store, [{ id: "caldav:a", name: "A" }], 20)
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(store.ranges[cache.rangeKey("", 0, 1000)].sourceIds)), ["caldav:a", "caldav:b"])
-  store = cache.withCalendars(store, [{ id: "caldav:a", name: "A" }, { id: "caldav:b", name: "B" }], 30)
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(store.ranges[cache.rangeKey("", 0, 1000)].sourceIds)), ["caldav:a"],
-    "re-enabled caldav:b must be fetched again before a range vouches for it")
-  assert.strictEqual(store.calendars.at, 30)
+    [{ id: "caldav:a", name: "A" }, { id: "caldav:b", name: "B", enabledAt: 5 }])
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(store.calendars.inUse)),
+    [{ id: "caldav:a", name: "A", enabledAt: 0 }, { id: "caldav:b", name: "B", enabledAt: 5 }])
+  const same = cache.withCalendars(store, [{ id: "caldav:a", name: "A" }, { id: "caldav:b", name: "B", enabledAt: 5 }], 99)
+  assert.strictEqual(same.calendars, store.calendars, "an unchanged list keeps its record")
+  const fewer = cache.withCalendars(store, [{ id: "caldav:a", name: "A" }], 30)
+  assert.strictEqual(fewer.calendars.at, 30)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(fewer.ranges[cache.rangeKey("", 0, 1000)].sourceIds)),
+    ["caldav:a", "caldav:b"], "recording a list leaves every range as it was")
   const many = []
   for (let i = 0; i < 1001; i++) many.push({ id: "caldav:" + i, name: "c" })
   const over = cache.withCalendars(store, many, 40)

@@ -81,33 +81,24 @@ function calendarsInUse(sources) {
     var source = list[i]
     if (!source || source.enabled === false || String(source.id || "") === "") continue
     if (out.length >= MAX_IN_USE) return null
-    out.push({ id: String(source.id), name: String(source.name || "").substring(0, 200) })
+    out.push({ id: String(source.id), name: String(source.name || "").substring(0, 200),
+      enabledAt: Math.max(0, Math.floor(Number(source.enabledAt) || 0)) })
   }
   return out
 }
 
-// Record the calendars in use now. A calendar that comes back into use is
-// struck from every cached range: what a range held of it predates the time
-// it was off, so the range must fetch it again before it vouches for it.
+// Record the calendars in use now. An unchanged list keeps its record (and
+// time), so restores and reconnects rewrite nothing.
 function withCalendars(store, sources, nowMs) {
-  var source = store && isObject(store.ranges) ? store.ranges : {}
   var list = calendarsInUse(sources)
-  var before = store && isObject(store.calendars) && Array.isArray(store.calendars.inUse)
-    ? store.calendars.inUse.map(function(c) { return String(c && c.id || "") }) : null
-  var added = list && before ? list.map(function(c) { return c.id }).filter(function(id) {
-    return before.indexOf(id) < 0 }) : []
-  var ranges = {}
-  for (var key in source) {
-    var range = source[key]
-    if (added.length && range && Array.isArray(range.sourceIds)) {
-      range = Object.assign({}, range, { sourceIds: range.sourceIds.filter(function(id) {
-        return added.indexOf(String(id)) < 0 }) })
-    }
-    ranges[key] = range
-  }
-  return { version: VERSION, ranges: ranges,
-    calendars: list ? { at: Number(nowMs) || 0, inUse: list }
-      : { at: Number(nowMs) || 0, inUse: [], overflow: true } }
+  var old = store && isObject(store.calendars) ? store.calendars : null
+  var calendars = list ? { at: Number(nowMs) || 0, inUse: list }
+    : { at: Number(nowMs) || 0, inUse: [], overflow: true }
+  if (old && JSON.stringify(old.inUse) === JSON.stringify(calendars.inUse)
+      && (old.overflow === true) === (calendars.overflow === true))
+    calendars = old
+  return { version: VERSION, ranges: store && isObject(store.ranges) ? store.ranges : {},
+    calendars: calendars }
 }
 
 function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds, fetchedSourceIds, inUse) {

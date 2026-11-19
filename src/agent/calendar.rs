@@ -163,8 +163,9 @@ pub fn read(arguments: &Value) -> Result<String> {
 /// the stores wins. A calendar not in it was disabled or removed, or belongs
 /// to an account that is gone, and its cached events are not read.
 pub struct Calendars {
-    /// Every calendar in use, which a complete range must hold.
-    in_use: Vec<(String, String)>,
+    /// Every calendar in use, which a complete range must hold, with its
+    /// name and when it was last switched on.
+    in_use: Vec<(String, String, i64)>,
     /// The calendars that may be read: those in use in every newest record
     /// when two views wrote in the same millisecond.
     readable: Vec<String>,
@@ -199,22 +200,28 @@ impl Calendars {
         if records.iter().any(|record| record["overflow"] == true) {
             return Err(Unknown::Overflow);
         }
-        let list = |record: &Value| -> Vec<(String, String)> {
-            let mut out: Vec<(String, String)> = Vec::new();
+        let list = |record: &Value| -> Vec<(String, String, i64)> {
+            let mut out: Vec<(String, String, i64)> = Vec::new();
             for calendar in record["inUse"].as_array().unwrap() {
                 let id = calendar["id"].as_str().unwrap_or("");
-                if id.is_empty() || id.len() > 512 || out.iter().any(|(known, _)| known == id) {
+                if id.is_empty() || id.len() > 512 || out.iter().any(|(known, ..)| known == id) {
                     continue;
                 }
-                out.push((id.to_owned(), text(&calendar["name"], 120)));
+                out.push((
+                    id.to_owned(),
+                    text(&calendar["name"], 120),
+                    ms(&calendar["enabledAt"]),
+                ));
             }
             out
         };
-        let lists: Vec<Vec<(String, String)>> = records.iter().map(|r| list(r)).collect();
-        let mut in_use: Vec<(String, String)> = Vec::new();
+        let lists: Vec<Vec<(String, String, i64)>> = records.iter().map(|r| list(r)).collect();
+        let mut in_use: Vec<(String, String, i64)> = Vec::new();
         for entry in lists.iter().flatten() {
-            if !in_use.iter().any(|(known, _)| *known == entry.0) {
-                in_use.push(entry.clone());
+            match in_use.iter_mut().find(|(known, ..)| *known == entry.0) {
+                // The later switch-on time is the stricter one.
+                Some(known) => known.2 = known.2.max(entry.2),
+                None => in_use.push(entry.clone()),
             }
         }
         if in_use.is_empty() || in_use.len() > 1000 {
@@ -226,11 +233,11 @@ impl Calendars {
         }
         let readable = in_use
             .iter()
-            .map(|(id, _)| id.clone())
+            .map(|(id, ..)| id.clone())
             .filter(|id| {
                 lists
                     .iter()
-                    .all(|list| list.iter().any(|(known, _)| known == id))
+                    .all(|list| list.iter().any(|(known, ..)| known == id))
             })
             .collect();
         Ok(Self { in_use, readable })
@@ -238,11 +245,17 @@ impl Calendars {
     pub fn allows(&self, id: &str) -> bool {
         self.readable.iter().any(|known| known == id)
     }
+    fn enabled_at(&self, id: &str) -> i64 {
+        self.in_use
+            .iter()
+            .find(|(known, ..)| known == id)
+            .map_or(0, |(.., at)| *at)
+    }
     fn name(&self, id: &str) -> String {
         self.in_use
             .iter()
-            .find(|(known, _)| known == id)
-            .map(|(_, name)| name.clone())
+            .find(|(known, ..)| known == id)
+            .map(|(_, name, _)| name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| text(&json!(id), 120))
     }
@@ -333,6 +346,9 @@ pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
     struct Range<'a> {
         scope: &'a str,
         missing: Vec<String>,
+        /// The calendars a recorded range vouches for; None for a range from
+        /// before ranges recorded their calendars.
+        vouched: Option<Vec<String>>,
         truncated: bool,
         from: i64,
         to: i64,
@@ -348,7 +364,7 @@ pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
                 .collect()
         })
     };
-    let required: Vec<String> = calendars.in_use.iter().map(|(id, _)| id.clone()).collect();
+    let required: Vec<String> = calendars.in_use.iter().map(|(id, ..)| id.clone()).collect();
     let mut ranges = Vec::new();
     for store in stores {
         let Some(map) = store["ranges"].as_object() else {
@@ -361,12 +377,21 @@ pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
             }
             let scope = key.split('\n').next().unwrap_or("");
             let at = ms(&range["at"]);
+            let mut vouched = None;
             let missing: Vec<String> = match ids(&range["sourceIds"]) {
                 Some(loaded) => {
+                    // Loaded, not failed, and cached after the calendar was
+                    // last switched on: what it held of it before is stale.
                     let failed = ids(&range["failedSourceIds"]).unwrap_or_default();
+                    let range_at = ms(&range["at"]);
+                    let held: Vec<String> = loaded
+                        .into_iter()
+                        .filter(|id| !failed.contains(id) && range_at >= calendars.enabled_at(id))
+                        .collect();
+                    vouched = Some(held);
                     required
                         .iter()
-                        .filter(|id| !loaded.contains(id) || failed.contains(id))
+                        .filter(|id| !vouched.as_ref().unwrap().contains(id))
                         .cloned()
                         .collect()
                 }
@@ -375,6 +400,7 @@ pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
             ranges.push(Range {
                 scope,
                 missing,
+                vouched,
                 truncated: range["truncated"] == true,
                 from,
                 to,
@@ -414,6 +440,10 @@ pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
                 if event_start >= end
                     || event_end.max(event_start + 1) <= start
                     || !calendars.allows(event["sourceId"].as_str().unwrap_or(""))
+                    || range
+                        .vouched
+                        .as_ref()
+                        .is_some_and(|held| !held.iter().any(|id| event["sourceId"] == id.as_str()))
                 {
                     continue;
                 }
@@ -746,6 +776,57 @@ mod tests {
             answer["partial"][0]["missing"],
             json!(["b@example.org", "Vidar"])
         );
+    }
+
+    #[test]
+    fn a_calendar_switched_on_after_a_range_was_cached_is_not_vouched_for() {
+        // The range loaded caldav:b before it was turned off and on again: its
+        // copy of b is stale, so b is missing there and its events are not
+        // listed. A sign-in flap leaves enabledAt alone and changes nothing.
+        let mut old_b = event("b", "Old B meeting", at(3, 10), at(3, 11));
+        old_b["sourceId"] = json!("caldav:b");
+        let cached = in_use(
+            recorded(
+                store(vec![(
+                    "",
+                    at(1, 0),
+                    at(10, 0),
+                    20,
+                    vec![event("a", "A meeting", at(3, 9), at(3, 10)), old_b],
+                )]),
+                json!(["caldav:a", "caldav:b"]),
+            ),
+            40,
+            json!([{"id":"caldav:a","name":"A","enabledAt":0},{"id":"caldav:b","name":"B","enabledAt":30}]),
+        );
+        let answer = select(&[cached.clone()], at(1, 0), at(10, 0));
+        assert_eq!(titles(&answer), ["A meeting"]);
+        assert_eq!(answer["partial"][0]["missing"], json!(["B"]));
+        let mut fresh = cached;
+        fresh["calendars"]["inUse"][1]["enabledAt"] = json!(10);
+        let answer = select(&[fresh], at(1, 0), at(10, 0));
+        assert_eq!(titles(&answer), ["A meeting", "Old B meeting"]);
+        assert_eq!(answer["uncovered"], json!([]));
+    }
+
+    #[test]
+    fn a_failed_calendars_cached_events_are_not_listed() {
+        let mut stale = event("v", "Stale", at(3, 10), at(3, 11));
+        stale["sourceId"] = json!("caldav:v");
+        let mut cached = in_use(
+            recorded(
+                store(vec![("", at(1, 0), at(10, 0), 20, vec![stale])]),
+                json!(["caldav:a", "caldav:v"]),
+            ),
+            20,
+            json!([{"id":"caldav:a","name":"A"},{"id":"caldav:v","name":"V"}]),
+        );
+        for range in cached["ranges"].as_object_mut().unwrap().values_mut() {
+            range["failedSourceIds"] = json!(["caldav:v"]);
+        }
+        let answer = select(&[cached], at(1, 0), at(10, 0));
+        assert_eq!(answer["events"], json!([]));
+        assert_eq!(answer["partial"][0]["missing"], json!(["V"]));
     }
 
     #[test]

@@ -378,3 +378,19 @@ assert.strictEqual(namedMicrosoft.sources[0].name, "Work appointments",
   assert.strictEqual(sources.hasNone(true, google), false,
     "a Google mailbox brings its own calendar")
 }
+
+{
+  // Switching a calendar on stamps when; turning it off keeps the stamp, and
+  // an already enabled calendar keeps its own.
+  const base = sources.add(sources.emptyList(), { id: "caldav:x", kind: "caldav", name: "X",
+    url: "https://cal.example/x/", enabled: false })
+  const before = Date.now()
+  const on = sources.setEnabled(base, "caldav:x", true)
+  assert.ok(on.sources[0].enabledAt >= before, "enabling records the time")
+  const off = sources.setEnabled(on, "caldav:x", false)
+  assert.strictEqual(off.sources[0].enabledAt, on.sources[0].enabledAt)
+  const again = sources.setEnabled(on, "caldav:x", true)
+  assert.strictEqual(again.sources[0].enabledAt, on.sources[0].enabledAt, "already on keeps its time")
+  assert.strictEqual(sources.add(sources.emptyList(), { id: "caldav:y", kind: "caldav",
+    url: "https://cal.example/y/" }).sources[0].enabledAt, 0)
+}

@@ -115,7 +115,11 @@ fn normalize_calendar(value: &Value) -> Value {
                     .as_str()
                     .filter(|id| !id.is_empty() && id.len() <= 512)?;
                 let name: String = c["name"].as_str().unwrap_or("").chars().take(200).collect();
-                Some(json!({"id":id,"name":name}))
+                let enabled_at = c["enabledAt"]
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .unwrap_or(0.0);
+                Some(json!({"id":id,"name":name,"enabledAt":enabled_at}))
             })
             .collect();
         // A list over the cap is unknown, never a shorter list.

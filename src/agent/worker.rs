@@ -78,7 +78,7 @@ pub async fn run(id: &str) -> Result<(), &'static str> {
                 super::prompt::turn(&context, previous.as_ref(), prompt_history, resumed);
             let text = serde_json::to_string(&supplied).map_err(|_| INVALID)?;
             if resumed {
-                text
+                format!("{}\n\n{text}", super::calendar::today())
             } else {
                 format!(
                     "{MAIL_ROLE}\n\n{INSTRUCTIONS}When the owner asks to create or revise an email draft, call the available propose_draft tool with the complete subject and body. The tool records a proposal for human review; it does not edit or send mail. Do not substitute a plain-text draft for the tool call. {}For other questions, answer normally.\n\n{text}",

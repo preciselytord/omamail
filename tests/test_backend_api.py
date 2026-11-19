@@ -172,7 +172,11 @@ function storageSnapshot(directory = process.env.HOME) {
           output:'answer-'+index,complete:true,sessionId:job.sessionId};
         const context = {accountId:job.accountId,prompt:'question-'+index,...(index ? {parent:id(index-1)} : {})};
         for (const [name, value] of Object.entries({'job.json':job,'display.json':display,'context.json':context,
-          ...(index < 9 ? {'next.json':id(index+1)} : {})}))
+          ...(index < 9 ? {'next.json':id(index+1)} : {}),
+          // The newest turn carries one calendar suggestion (API 10).
+          ...(index === 9 ? {'event-proposals.json':[{id:id(index)+'-e0',jobId:id(index),accountId:job.accountId,
+            messageId:'mail',afterTurn:2,title:'Synthetic dinner',start:'2030-03-05T19:00',end:'',
+            startMs:1898953200000,endMs:1898956800000,allDay:false,location:'',notes:'',confidence:1}]} : {})}))
           fs.writeFileSync(directory+'/'+name,JSON.stringify(value),{mode:0o600});
       }
     }

@@ -1296,6 +1296,21 @@
       }
     },
     {
+      "name": "AI event suggestions reach the panel as event cards",
+      "method": "agent.jobShow",
+      "params": {
+        "id": "0000000000000000000000000000000a"
+      },
+      "equals": {
+        "proposals.0.kind": "event",
+        "proposals.0.id": "0000000000000000000000000000000a-e0",
+        "proposals.0.title": "Synthetic dinner",
+        "proposals.0.startMs": 1898953200000,
+        "proposals.0.allDay": false,
+        "proposals.0.afterTurn": 16
+      }
+    },
+    {
       "name": "AI watched completions remain visible on older chat pages",
       "method": "agent.jobsList",
       "params": {
@@ -1624,7 +1639,8 @@
       "Calendar authentication errors preserve safe context",
       "CalDAV verification refuses a plain-http address before any request",
       "CalDAV verification requires the password it is to check",
-      "Google Contacts refuses an account that is not a Gmail address"
+      "Google Contacts refuses an account that is not a Gmail address",
+      "AI event suggestions reach the panel as event cards"
     ]
   }
 }

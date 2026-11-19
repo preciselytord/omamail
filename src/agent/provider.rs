@@ -80,7 +80,7 @@ impl Provider {
                     "web_search=\"disabled\"",
                 ]);
                 if proposals {
-                    command.arg("-c").arg(format!("mcp_servers.omamail={{command={},args=[\"agent-mcp\",{}],env_vars=[\"XDG_STATE_HOME\",\"XDG_CACHE_HOME\"],enabled_tools=[\"propose_draft\",\"read_calendar\",\"propose_event\"],required=true,tools={{propose_draft={{approval_mode=\"approve\"}},read_calendar={{approval_mode=\"approve\"}},propose_event={{approval_mode=\"approve\"}}}}}}",json!(exe).to_string(),json!(id).to_string()));
+                    command.arg("-c").arg(format!("mcp_servers.omamail={{command={},args=[\"agent-mcp\",{}],env_vars=[\"XDG_STATE_HOME\",\"XDG_CACHE_HOME\",\"XDG_CONFIG_HOME\"],enabled_tools=[\"propose_draft\",\"read_calendar\",\"propose_event\"],required=true,tools={{propose_draft={{approval_mode=\"approve\"}},read_calendar={{approval_mode=\"approve\"}},propose_event={{approval_mode=\"approve\"}}}}}}",json!(exe).to_string(),json!(id).to_string()));
                 }
                 for setting in [
                     "features.goals=false",

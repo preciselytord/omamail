@@ -54,10 +54,7 @@ FocusScope {
     }
     if (controller.composerHeld) { localError = "Finish the event you are editing first"; return false }
     localError = ""
-    var prefill = Agent.eventPrefill(event, String(event.accountId || accountId))
-    // The owner asked for this one; no message "put it" any way.
-    prefill.description = prefill.description.replace(/, as the message put it\./g, ".")
-    controller.composeRequested(prefill)
+    controller.composeRequested(Agent.proposedEventPrefill(event, String(event.accountId || accountId)))
     return true
   }
   readonly property string routingChangedText: "The sender, recipients or quoted history changed. Edit the draft to send with your current choices."

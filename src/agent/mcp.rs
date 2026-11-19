@@ -24,7 +24,14 @@ pub fn run(id: &str) -> Result<(), &'static str> {
         std::io::stdin().lock(),
         std::io::stdout().lock(),
         |tool, arguments| match tool {
-            Tool::ReadCalendar => super::calendar::read(arguments),
+            Tool::ReadCalendar => {
+                // The same turn ownership as a proposal: a finished, cancelled
+                // or look job's server reads nothing.
+                Store::open()
+                    .and_then(|store| active(&store, id))
+                    .map_err(|_| "agent_proposal_inactive")?;
+                super::calendar::read(arguments)
+            }
             Tool::ProposeDraft => {
                 let content = proposals::validate(arguments)?;
                 record(
@@ -81,13 +88,7 @@ fn record(
     push: impl FnOnce(&Store, &mut Vec<Value>, usize) -> Result<String, &'static str>,
 ) -> Result<String, &'static str> {
     let store = Store::open()?;
-    let job = jobs::refresh(&store, id)?;
-    if job["state"] != "running"
-        || job["kind"] == "events"
-        || store.read_json(id, "cancel.json", 64)?.is_some()
-    {
-        return Err("agent_proposal_inactive");
-    }
+    active(&store, id)?;
     let mut saved = store
         .read_json(id, file, proposals::MAX_BYTES)?
         .unwrap_or_else(|| json!([]));
@@ -121,6 +122,19 @@ fn record(
     ))
 }
 
+/// Whether the job may still use its tools: running, not a look, and not
+/// cancelled. Cancellation writes cancel.json before signalling the worker.
+fn active(store: &Store, id: &str) -> Result<(), &'static str> {
+    let job = jobs::refresh(store, id)?;
+    if job["state"] != "running"
+        || job["kind"] == "events"
+        || store.read_json(id, "cancel.json", 64)?.is_some()
+    {
+        return Err("agent_proposal_inactive");
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Tool {
     ProposeDraft,
@@ -145,9 +159,17 @@ impl Tool {
             Self::ProposeEvent => format!(
                 "Event suggestion refused ({reason}). Check title, start and end, and whether this turn is still active."
             ),
-            Self::ReadCalendar => format!(
-                "Calendar read refused ({reason}). Ask for one window of at most 31 days as from/to YYYY-MM-DD."
-            ),
+            Self::ReadCalendar => match reason {
+                "agent_calendar_invalid" | "agent_calendar_range" => format!(
+                    "Calendar read refused ({reason}). Ask for one window of at most 31 days as from/to YYYY-MM-DD."
+                ),
+                "agent_proposal_inactive" => {
+                    format!("Calendar read refused ({reason}): this turn is no longer active.")
+                }
+                _ => format!(
+                    "The calendar could not be read ({reason}). Tell the owner their calendar is unavailable; do not treat any day as free."
+                ),
+            },
         }
     }
 }

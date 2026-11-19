@@ -105,6 +105,12 @@ pub fn record(item: &serde_json::Map<String, Value>) -> Option<Value> {
     }))
 }
 
+/// One ISO 8601 time or `YYYY-MM-DD` day as epoch milliseconds, read the way
+/// `record` reads `start` and `end`.
+pub fn when(value: Option<&Value>, all_day: bool) -> Option<i64> {
+    parse_when(value, all_day).map(|(ms, _)| ms)
+}
+
 /// What the answer says about how many it found, for the job's own line.
 pub fn summary(events: &[Value]) -> String {
     match events.len() {

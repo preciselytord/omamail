@@ -54,7 +54,13 @@ fn configuration() -> Result<String> {
 fn isolate(command: &mut Command) -> Result<()> {
     let directory = directory()?;
     crate::cache::directories(&directory, &["config"], true)?.ok_or("agent_storage_unavailable")?;
+    // The isolated XDG_CONFIG_HOME below hides the owner's calendars.json from
+    // the MCP server OpenCode starts; name the owner's own root for it.
+    let owner_config = crate::platform::dirs::AppDirs::discover()
+        .map_err(|_| "agent_storage_unavailable")?
+        .config;
     command
+        .env("OMAMAIL_CONFIG_HOME", owner_config)
         .env("XDG_CONFIG_HOME", directory.join("config"))
         .env("OPENCODE_DISABLE_PROJECT_CONFIG", "true")
         .env("OPENCODE_CONFIG_PROJECT_DISABLE", "true")

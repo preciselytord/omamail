@@ -174,9 +174,14 @@ Item {
       compare(calendarStub.prefill.location,"Home")
       compare(calendarStub.prefill.accountId,service.activeAccountId)
       compare(popup.localError,"")
-      var day=new Date(2030,2,6).getTime()
-      verify(popup.addProposedEvent({title:"Holiday",startMs:day,endMs:day+86400000,allDay:true,notes:"",location:""}))
-      compare(calendarStub.prefill.description,"All day.")
+      compare(calendarStub.prefill.allDay,false)
+      compare(calendarStub.prefill.endMs,start+3600000)
+      var day=new Date(2030,2,5).getTime(), after=new Date(2030,2,8).getTime()
+      verify(popup.addProposedEvent({title:"Holiday",startMs:day,endMs:after,allDay:true,notes:"Pack",location:""}))
+      compare(calendarStub.prefill.allDay,true)
+      compare(calendarStub.prefill.startMs,day)
+      compare(calendarStub.prefill.endMs,after)
+      compare(calendarStub.prefill.description,"Pack")
     }
     function test_reply_card_keeps_history_out_of_preview_and_adds_it_on_send() {
       service.jobs=[{id:"chat",messageId:"m1",accountId:service.activeAccountId,state:"done",canContinue:true}]

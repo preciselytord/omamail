@@ -386,6 +386,20 @@ function suggestionWhen(suggestion, nowMs) {
 // event that runs past midnight ends at the day's last minute, with the
 // notes saying what the message actually put — the owner reads the form
 // before anything is written, which is the point of opening it.
+// An event the owner asked the chat for goes to the composer as it was
+// proposed: a whole day stays a whole day (the composer takes the midnight
+// after the last day as its end), and a span across days keeps its end. The
+// message-reading caveats of eventPrefill do not apply to it.
+function proposedEventPrefill(event, accountId) {
+  var e = event || {}
+  var start = Number(e.startMs) || 0
+  var end = Number(e.endMs) || 0
+  return { title: String(e.title || ""), startMs: start,
+    endMs: end > start ? end : start + (e.allDay === true ? 86400000 : 3600000),
+    allDay: e.allDay === true, location: String(e.location || ""),
+    description: String(e.notes || ""), accountId: String(accountId || "") }
+}
+
 function eventPrefill(suggestion, accountId) {
   var s = suggestion || {}
   var start = Number(s.startMs) || 0

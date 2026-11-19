@@ -27,9 +27,12 @@ pub fn run(id: &str) -> Result<(), &'static str> {
             Tool::ReadCalendar => {
                 // The same turn ownership as a proposal: a finished, cancelled
                 // or look job's server reads nothing.
-                Store::open()
-                    .and_then(|store| active(&store, id))
-                    .map_err(|_| "agent_proposal_inactive")?;
+                Store::open().and_then(|store| active(&store, id)).map_err(
+                    |reason| match reason {
+                        "agent_proposal_inactive" => reason,
+                        _ => "agent_calendar_unavailable",
+                    },
+                )?;
                 super::calendar::read(arguments)
             }
             Tool::ProposeDraft => {

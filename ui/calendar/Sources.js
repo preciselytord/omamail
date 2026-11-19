@@ -76,6 +76,9 @@ function add(list, raw) {
   for (var i = 0; i < next.sources.length; i++) {
     if (next.sources[i] && next.sources[i].id === source.id) { found = i; break }
   }
+  // A replacement that carries no switch-on time keeps the saved one.
+  if (found >= 0 && !source.enabledAt && next.sources[found])
+    source.enabledAt = makeSource(next.sources[found]).enabledAt
   if (found >= 0) next.sources[found] = source
   else next.sources.push(source)
   return next
@@ -336,7 +339,8 @@ function applyDiscovery(list, result) {
       accountId: accountId, calendarId: remote.calendarId,
       url: remote.url, username: remote.username,
       enabled: saved ? saved.enabled !== false : initial,
-      enabledAt: saved ? saved.enabledAt : 0,
+      // A calendar discovery adds is switched on now; a saved one keeps its time.
+      enabledAt: saved ? saved.enabledAt : Date.now(),
       readOnly: remote.readOnly === true, discovered: true,
       colorKey: saved ? saved.colorKey : Palette.defaultKey(id),
       accessRole: remote.accessRole, timeZone: remote.timeZone,

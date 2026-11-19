@@ -96,3 +96,13 @@ console.log("test_calendar_cache.js ok")
   assert.strictEqual(over.calendars.overflow, true, "more than the cap is unknown, not cut")
   assert.deepStrictEqual(JSON.parse(JSON.stringify(over.calendars.inUse)), [])
 }
+
+{
+  // A record read back from the backend has its keys reordered and numbers as
+  // floats; it is still the same list.
+  const restored = { version: 3, ranges: {}, calendars: { at: 7, inUse: [{ enabledAt: 5.0, id: "caldav:a", name: "A" }] } }
+  const again = cache.withCalendars(restored, [{ id: "caldav:a", name: "A", enabledAt: 5 }], 99)
+  assert.strictEqual(again.calendars, restored.calendars, "a restored identical list is not rewritten")
+  const put = cache.putRange(cache.emptyStore(), "", 0, 1000, [], 50, [], [], ["caldav:a"], null, 40)
+  assert.strictEqual(put.ranges[cache.rangeKey("", 0, 1000)].fetchedAt, 40)
+}

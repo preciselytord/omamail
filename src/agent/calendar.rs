@@ -383,7 +383,13 @@ pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
                     // Loaded, not failed, and cached after the calendar was
                     // last switched on: what it held of it before is stale.
                     let failed = ids(&range["failedSourceIds"]).unwrap_or_default();
-                    let range_at = ms(&range["at"]);
+                    // When its refresh began, where recorded: its data is no
+                    // newer than that.
+                    let range_at = if range["fetchedAt"].is_number() {
+                        ms(&range["fetchedAt"])
+                    } else {
+                        ms(&range["at"])
+                    };
                     let held: Vec<String> = loaded
                         .into_iter()
                         .filter(|id| !failed.contains(id) && range_at >= calendars.enabled_at(id))
@@ -807,6 +813,23 @@ mod tests {
         let answer = select(&[fresh], at(1, 0), at(10, 0));
         assert_eq!(titles(&answer), ["A meeting", "Old B meeting"]);
         assert_eq!(answer["uncovered"], json!([]));
+    }
+
+    #[test]
+    fn a_refresh_that_began_before_a_calendar_was_switched_on_does_not_vouch_for_it() {
+        let mut cached = in_use(
+            recorded(
+                store(vec![("", at(1, 0), at(10, 0), 40, vec![])]),
+                json!(["caldav:a", "caldav:b"]),
+            ),
+            40,
+            json!([{"id":"caldav:a","name":"A"},{"id":"caldav:b","name":"B","enabledAt":30}]),
+        );
+        for range in cached["ranges"].as_object_mut().unwrap().values_mut() {
+            range["fetchedAt"] = json!(20);
+        }
+        let answer = select(&[cached], at(1, 0), at(10, 0));
+        assert_eq!(answer["partial"][0]["missing"], json!(["B"]));
     }
 
     #[test]

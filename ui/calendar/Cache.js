@@ -87,6 +87,16 @@ function calendarsInUse(sources) {
   return out
 }
 
+// Field by field: the backend stores each entry with its keys reordered.
+function sameInUse(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+  for (var i = 0; i < a.length; i++) {
+    if (!a[i] || String(a[i].id) !== b[i].id || String(a[i].name || "") !== b[i].name
+        || Math.floor(Number(a[i].enabledAt) || 0) !== b[i].enabledAt) return false
+  }
+  return true
+}
+
 // Record the calendars in use now. An unchanged list keeps its record (and
 // time), so restores and reconnects rewrite nothing.
 function withCalendars(store, sources, nowMs) {
@@ -94,14 +104,13 @@ function withCalendars(store, sources, nowMs) {
   var old = store && isObject(store.calendars) ? store.calendars : null
   var calendars = list ? { at: Number(nowMs) || 0, inUse: list }
     : { at: Number(nowMs) || 0, inUse: [], overflow: true }
-  if (old && JSON.stringify(old.inUse) === JSON.stringify(calendars.inUse)
-      && (old.overflow === true) === (calendars.overflow === true))
+  if (old && (old.overflow === true) === (calendars.overflow === true) && sameInUse(old.inUse, calendars.inUse))
     calendars = old
   return { version: VERSION, ranges: store && isObject(store.ranges) ? store.ranges : {},
     calendars: calendars }
 }
 
-function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds, fetchedSourceIds, inUse) {
+function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds, fetchedSourceIds, inUse, fetchStartedAt) {
   if (Array.isArray(inUse)) store = withCalendars(store, inUse, nowMs)
   var source = store && isObject(store.ranges) ? store.ranges : {}
   var ranges = {}
@@ -124,6 +133,8 @@ function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceId
     range.sourceIds = sourceList(fetchedSourceIds)
     range.failedSourceIds = sourceList(failedSourceIds)
     range.truncated = kept.length > MAX_EVENTS
+    // When the refresh began: its data is no newer than this.
+    range.fetchedAt = Math.min(Number(fetchStartedAt) || Number(nowMs) || 0, Number(nowMs) || 0)
   }
   var keys = Object.keys(ranges)
   keys.sort(function(a, b) { return Number(ranges[b].at) - Number(ranges[a].at) })

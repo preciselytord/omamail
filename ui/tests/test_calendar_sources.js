@@ -394,3 +394,11 @@ assert.strictEqual(namedMicrosoft.sources[0].name, "Work appointments",
   assert.strictEqual(sources.add(sources.emptyList(), { id: "caldav:y", kind: "caldav",
     url: "https://cal.example/y/" }).sources[0].enabledAt, 0)
 }
+
+{
+  // Re-adding with no time keeps the saved one; discovery stamps a new
+  // calendar and keeps a saved one's time.
+  const saved = sources.add(sources.emptyList(), { id: "caldav:z", kind: "caldav", url: "https://c/z/", enabledAt: 77 })
+  assert.strictEqual(sources.add(saved, { id: "caldav:z", kind: "caldav", url: "https://c/z/", name: "Z" }).sources[0].enabledAt, 77)
+  assert.strictEqual(sources.add(saved, { id: "caldav:z", kind: "caldav", url: "https://c/z/", enabledAt: 90 }).sources[0].enabledAt, 90)
+}

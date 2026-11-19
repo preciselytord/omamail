@@ -43,6 +43,7 @@ Item {
   // The calendars the current refresh asked for, fixed when it starts, and
   // those whose events failed to load: what the cached range can vouch for.
   property var refreshSourceIds: []
+  property double refreshStartedAt: 0
   property var failedSourceIds: []
   property var queue: []
   property var activeSource: null
@@ -237,6 +238,7 @@ Item {
     })
     var sourceIds = queue.map(function(source) { return String(source.id || "") })
     refreshSourceIds = sourceIds
+    refreshStartedAt = Date.now()
     loading = true
     setEvents(eventCache.get(refreshScope, rangeStart, rangeEnd, sourceIds))
     processNext()
@@ -773,6 +775,9 @@ Item {
     candidate.kind = "caldav"
     candidate.id = Sources.sourceId(candidate)
     candidate.enabled = true
+    // Added again after removal or for the first time: nothing cached of it
+    // before now is current.
+    candidate.enabledAt = Date.now()
     var checked = Sources.validate(candidate)
     if (!checked.ok) { calendarSaved(false, checked.error); return }
     if (String(secret || "") === "") {
@@ -1114,7 +1119,7 @@ Item {
       if (rangeStart && rangeEnd && refreshScope === calendarScope)
         eventCache.put(refreshScope, rangeStart, rangeEnd, events,
           contextSources.sources.filter(function(source) { return root.sourceIncluded(source) }).map(function(source) { return String(source.id) }),
-          failedSourceIds, refreshSourceIds,
+          failedSourceIds, refreshSourceIds, refreshStartedAt,
           reminderMode || !sourcesLoaded ? null : (availableSources && availableSources.sources) || [])
       var nextStart = pendingRangeStart
       var nextEnd = pendingRangeEnd

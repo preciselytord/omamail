@@ -163,30 +163,80 @@ pub fn read(arguments: &Value) -> Result<String> {
 /// the stores wins. A calendar not in it was disabled or removed, or belongs
 /// to an account that is gone, and its cached events are not read.
 pub struct Calendars {
+    /// Every calendar in use, which a complete range must hold.
     in_use: Vec<(String, String)>,
+    /// The calendars that may be read: those in use in every newest record
+    /// when two views wrote in the same millisecond.
+    readable: Vec<String>,
+}
+
+/// Why a store's records cannot say which calendars are in use.
+pub enum Unknown {
+    NotRecorded,
+    Overflow,
+    Empty,
 }
 
 impl Calendars {
-    /// The newest `calendars` record of `stores`, or None before any view
-    /// has written one.
-    pub fn newest(stores: &[Value]) -> Option<Self> {
-        let record = stores
+    /// The newest `calendars` records of `stores`. Records with the same
+    /// newest time are combined strictly: all of them are required, and only
+    /// those in every one are read.
+    pub fn newest(stores: &[Value]) -> std::result::Result<Self, Unknown> {
+        let records: Vec<&Value> = stores
             .iter()
             .map(|store| &store["calendars"])
             .filter(|record| record["inUse"].is_array())
-            .max_by_key(|record| ms(&record["at"]))?;
-        let mut in_use = Vec::new();
-        for calendar in record["inUse"].as_array().unwrap().iter().take(1000) {
-            let id = calendar["id"].as_str().unwrap_or("");
-            if id.is_empty() || id.len() > 512 || in_use.iter().any(|(known, _)| known == id) {
-                continue;
-            }
-            in_use.push((id.to_owned(), text(&calendar["name"], 120)));
+            .collect();
+        let newest = records
+            .iter()
+            .map(|record| ms(&record["at"]))
+            .max()
+            .ok_or(Unknown::NotRecorded)?;
+        let records: Vec<&Value> = records
+            .into_iter()
+            .filter(|record| ms(&record["at"]) == newest)
+            .collect();
+        if records.iter().any(|record| record["overflow"] == true) {
+            return Err(Unknown::Overflow);
         }
-        Some(Self { in_use })
+        let list = |record: &Value| -> Vec<(String, String)> {
+            let mut out: Vec<(String, String)> = Vec::new();
+            for calendar in record["inUse"].as_array().unwrap() {
+                let id = calendar["id"].as_str().unwrap_or("");
+                if id.is_empty() || id.len() > 512 || out.iter().any(|(known, _)| known == id) {
+                    continue;
+                }
+                out.push((id.to_owned(), text(&calendar["name"], 120)));
+            }
+            out
+        };
+        let lists: Vec<Vec<(String, String)>> = records.iter().map(|r| list(r)).collect();
+        let mut in_use: Vec<(String, String)> = Vec::new();
+        for entry in lists.iter().flatten() {
+            if !in_use.iter().any(|(known, _)| *known == entry.0) {
+                in_use.push(entry.clone());
+            }
+        }
+        if in_use.is_empty() || in_use.len() > 1000 {
+            return Err(if in_use.is_empty() {
+                Unknown::Empty
+            } else {
+                Unknown::Overflow
+            });
+        }
+        let readable = in_use
+            .iter()
+            .map(|(id, _)| id.clone())
+            .filter(|id| {
+                lists
+                    .iter()
+                    .all(|list| list.iter().any(|(known, _)| known == id))
+            })
+            .collect();
+        Ok(Self { in_use, readable })
     }
     pub fn allows(&self, id: &str) -> bool {
-        self.in_use.iter().any(|(known, _)| known == id)
+        self.readable.iter().any(|known| known == id)
     }
     fn name(&self, id: &str) -> String {
         self.in_use
@@ -266,10 +316,19 @@ fn midnight(day: NaiveDate) -> Option<i64> {
 /// newest first within their scope, as `partial` parts naming the calendars
 /// they lack.
 pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
-    let Some(calendars) = Calendars::newest(stores) else {
-        return json!({"events":[],"coverage":[],
-            "uncovered":[{"from":iso(start,false),"to":iso(end,false)}],
-            "note":"Omamail has not yet recorded which calendars are in use; open its calendar once."});
+    let calendars = match Calendars::newest(stores) {
+        Ok(calendars) => calendars,
+        Err(why) => {
+            let note = match why {
+                Unknown::NotRecorded => {
+                    "Omamail has not yet recorded which calendars are in use; open its calendar once."
+                }
+                Unknown::Overflow => "Too many calendars are in use for the cache to say which.",
+                Unknown::Empty => "No calendar is in use in Omamail.",
+            };
+            return json!({"events":[],"coverage":[],
+                "uncovered":[{"from":iso(start,false),"to":iso(end,false)}],"note":note});
+        }
     };
     struct Range<'a> {
         scope: &'a str,
@@ -687,6 +746,52 @@ mod tests {
             answer["partial"][0]["missing"],
             json!(["b@example.org", "Vidar"])
         );
+    }
+
+    #[test]
+    fn an_empty_or_overflowing_record_is_unknown() {
+        let cached = store(vec![(
+            "",
+            at(1, 0),
+            at(10, 0),
+            5,
+            vec![event("a", "Dentist", at(3, 9), at(3, 10))],
+        )]);
+        for record in [
+            json!({"at":9,"inUse":[]}),
+            json!({"at":9,"inUse":[],"overflow":true}),
+        ] {
+            let mut store = cached.clone();
+            store["calendars"] = record;
+            let answer = select(&[store], at(1, 0), at(10, 0));
+            assert_eq!(answer["events"], json!([]));
+            assert_eq!(answer["uncovered"].as_array().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn records_written_together_are_combined_strictly() {
+        // Two views wrote in the same millisecond with different lists: both
+        // calendars are required, and only the one in both lists is read.
+        let mut on = event("1", "Both", at(2, 9), at(2, 10));
+        on["sourceId"] = json!("caldav:a");
+        let mut off = event("2", "One list", at(2, 11), at(2, 12));
+        off["sourceId"] = json!("caldav:b");
+        let first = in_use(
+            recorded(
+                store(vec![("", at(1, 0), at(5, 0), 3, vec![on, off])]),
+                json!(["caldav:a", "caldav:b"]),
+            ),
+            50,
+            json!([{"id":"caldav:a","name":"A"},{"id":"caldav:b","name":"B"}]),
+        );
+        let second = in_use(
+            json!({"version":3,"ranges":{}}),
+            50,
+            json!([{"id":"caldav:a","name":"A"}]),
+        );
+        let answer = select(&[first, second], at(1, 0), at(5, 0));
+        assert_eq!(titles(&answer), ["Both"]);
     }
 
     #[test]

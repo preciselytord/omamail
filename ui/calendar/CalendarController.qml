@@ -152,6 +152,20 @@ Item {
     return root.sourceIncluded(source)
   }).map(function(source) { return String(source.id || "") }).join("\n")
   onEnabledSourceKeyChanged: reloadVisibleRange()
+  // Every calendar in use, of every account: recorded in the cache the moment
+  // it changes, so the assistant's calendar reader never judges against a
+  // list older than the settings. Not before the calendar list has loaded,
+  // when it would be empty.
+  readonly property string inUseKey: (availableSources && Array.isArray(availableSources.sources)
+    ? availableSources.sources : []).filter(function(source) {
+    return !!source && source.enabled !== false
+  }).map(function(source) { return String(source.id || "") + "\t" + String(source.name || "") }).join("\n")
+  onInUseKeyChanged: recordInUse()
+  onSourcesLoadedChanged: recordInUse()
+  function recordInUse() {
+    if (reminderMode || !sourcesLoaded || !eventCache.loaded) return
+    eventCache.recordInUse((availableSources && availableSources.sources) || [])
+  }
   Connections {
     target: root.service
     ignoreUnknownSignals: true
@@ -1101,7 +1115,7 @@ Item {
         eventCache.put(refreshScope, rangeStart, rangeEnd, events,
           contextSources.sources.filter(function(source) { return root.sourceIncluded(source) }).map(function(source) { return String(source.id) }),
           failedSourceIds, refreshSourceIds,
-          reminderMode ? null : (availableSources && availableSources.sources) || [])
+          reminderMode || !sourcesLoaded ? null : (availableSources && availableSources.sources) || [])
       var nextStart = pendingRangeStart
       var nextEnd = pendingRangeEnd
       pendingRangeStart = 0
@@ -1178,6 +1192,7 @@ Item {
     backend: root.service ? root.service.backend : null
     cacheName: root.cacheName
     onRestored: {
+      root.recordInUse()
       if (root.rangeStart && root.rangeEnd && !root.loading)
         root.refresh(root.rangeStart, root.rangeEnd)
     }

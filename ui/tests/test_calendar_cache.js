@@ -76,3 +76,20 @@ console.log("test_calendar_cache.js ok")
   const kept = cache.putRange(written, "", 1000, 2000, [], 70)
   assert.strictEqual(kept.calendars.at, 60, "a write with no list keeps the last one")
 }
+
+{
+  // A calendar back in use is struck from every cached range; others stay.
+  let store = cache.putRange(cache.emptyStore(), "", 0, 1000, [], 10, [], [], ["caldav:a", "caldav:b"],
+    [{ id: "caldav:a", name: "A" }, { id: "caldav:b", name: "B" }])
+  store = cache.withCalendars(store, [{ id: "caldav:a", name: "A" }], 20)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(store.ranges[cache.rangeKey("", 0, 1000)].sourceIds)), ["caldav:a", "caldav:b"])
+  store = cache.withCalendars(store, [{ id: "caldav:a", name: "A" }, { id: "caldav:b", name: "B" }], 30)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(store.ranges[cache.rangeKey("", 0, 1000)].sourceIds)), ["caldav:a"],
+    "re-enabled caldav:b must be fetched again before a range vouches for it")
+  assert.strictEqual(store.calendars.at, 30)
+  const many = []
+  for (let i = 0; i < 1001; i++) many.push({ id: "caldav:" + i, name: "c" })
+  const over = cache.withCalendars(store, many, 40)
+  assert.strictEqual(over.calendars.overflow, true, "more than the cap is unknown, not cut")
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(over.calendars.inUse)), [])
+}

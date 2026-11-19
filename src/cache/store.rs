@@ -117,9 +117,13 @@ fn normalize_calendar(value: &Value) -> Value {
                 let name: String = c["name"].as_str().unwrap_or("").chars().take(200).collect();
                 Some(json!({"id":id,"name":name}))
             })
-            .take(1000)
             .collect();
-        out["calendars"] = json!({"at":at,"inUse":in_use});
+        // A list over the cap is unknown, never a shorter list.
+        out["calendars"] = if value["calendars"]["overflow"] == true || in_use.len() > 1000 {
+            json!({"at":at,"inUse":[],"overflow":true})
+        } else {
+            json!({"at":at,"inUse":in_use})
+        };
     }
     if let Some(ranges) = value["ranges"].as_object() {
         let mut entries: Vec<_> = ranges.iter().collect();

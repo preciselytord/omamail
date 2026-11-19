@@ -70,18 +70,48 @@ function sourceList(ids) {
 // The calendars in use when a range was written: every enabled calendar of
 // every account, as the views know them. A reader judges each range against
 // the newest list instead of re-deriving the views' rules.
+// More than this many is recorded as an overflow, which a reader treats as
+// unknown rather than as a shorter list.
+var MAX_IN_USE = 1000
+
 function calendarsInUse(sources) {
   var list = Array.isArray(sources) ? sources : []
   var out = []
-  for (var i = 0; i < list.length && out.length < 1000; i++) {
+  for (var i = 0; i < list.length; i++) {
     var source = list[i]
     if (!source || source.enabled === false || String(source.id || "") === "") continue
+    if (out.length >= MAX_IN_USE) return null
     out.push({ id: String(source.id), name: String(source.name || "").substring(0, 200) })
   }
   return out
 }
 
+// Record the calendars in use now. A calendar that comes back into use is
+// struck from every cached range: what a range held of it predates the time
+// it was off, so the range must fetch it again before it vouches for it.
+function withCalendars(store, sources, nowMs) {
+  var source = store && isObject(store.ranges) ? store.ranges : {}
+  var list = calendarsInUse(sources)
+  var before = store && isObject(store.calendars) && Array.isArray(store.calendars.inUse)
+    ? store.calendars.inUse.map(function(c) { return String(c && c.id || "") }) : null
+  var added = list && before ? list.map(function(c) { return c.id }).filter(function(id) {
+    return before.indexOf(id) < 0 }) : []
+  var ranges = {}
+  for (var key in source) {
+    var range = source[key]
+    if (added.length && range && Array.isArray(range.sourceIds)) {
+      range = Object.assign({}, range, { sourceIds: range.sourceIds.filter(function(id) {
+        return added.indexOf(String(id)) < 0 }) })
+    }
+    ranges[key] = range
+  }
+  return { version: VERSION, ranges: ranges,
+    calendars: list ? { at: Number(nowMs) || 0, inUse: list }
+      : { at: Number(nowMs) || 0, inUse: [], overflow: true } }
+}
+
 function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds, fetchedSourceIds, inUse) {
+  if (Array.isArray(inUse)) store = withCalendars(store, inUse, nowMs)
   var source = store && isObject(store.ranges) ? store.ranges : {}
   var ranges = {}
   for (var key in source) ranges[key] = source[key]
@@ -108,9 +138,6 @@ function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceId
   keys.sort(function(a, b) { return Number(ranges[b].at) - Number(ranges[a].at) })
   for (var i = MAX_RANGES; i < keys.length; i++) delete ranges[keys[i]]
   var next = { version: VERSION, ranges: ranges }
-  if (Array.isArray(inUse))
-    next.calendars = { at: Number(nowMs) || 0, inUse: calendarsInUse(inUse) }
-  else if (store && isObject(store.calendars))
-    next.calendars = store.calendars
+  if (store && isObject(store.calendars)) next.calendars = store.calendars
   return next
 }

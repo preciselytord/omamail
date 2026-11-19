@@ -26,6 +26,11 @@ Item {
     if (loaded) saveTimer.restart()
   }
 
+  function recordInUse(sources) {
+    store = Cache.withCalendars(store, sources, Date.now())
+    if (loaded) saveTimer.restart()
+  }
+
   function restore() {
     var mine = ++epoch
     loaded = false

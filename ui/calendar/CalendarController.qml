@@ -40,6 +40,8 @@ Item {
   // switch a cache miss: the calendar blanked and every account's calendars
   // were fetched again to redraw what was already on screen.
   property string refreshScope: ""
+  // Calendars whose events failed to load in the current refresh.
+  property var failedSourceIds: []
   property var queue: []
   property var activeSource: null
   property var passwordSaveQueue: []
@@ -212,6 +214,7 @@ Item {
     lastErrorKind = ""
     refreshAccountId = accountId
     refreshScope = calendarScope
+    failedSourceIds = []
     var effectiveSources = sourcesForAccount(refreshAccountId)
     queue = effectiveSources.sources.filter(function(source) {
       return root.sourceIncluded(source)
@@ -1072,6 +1075,7 @@ Item {
 
   function failSource(reason, kind) {
     if (refreshScope !== calendarScope) { processNext(); return }
+    if (activeSource) failedSourceIds = failedSourceIds.concat([String(activeSource.id || "")])
     var name = Sources.errorLabel(activeSource, service ? service.accountSummaries : [])
     lastError = name + ": " + String(reason || "Could not load events")
     lastErrorKind = String(kind || "")
@@ -1092,7 +1096,8 @@ Item {
       }))
       if (rangeStart && rangeEnd && refreshScope === calendarScope)
         eventCache.put(refreshScope, rangeStart, rangeEnd, events,
-          contextSources.sources.filter(function(source) { return root.sourceIncluded(source) }).map(function(source) { return String(source.id) }))
+          contextSources.sources.filter(function(source) { return root.sourceIncluded(source) }).map(function(source) { return String(source.id) }),
+          failedSourceIds)
       var nextStart = pendingRangeStart
       var nextEnd = pendingRangeEnd
       pendingRangeStart = 0

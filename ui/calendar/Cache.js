@@ -58,7 +58,14 @@ function eventsFor(store, scope, startMs, endMs, enabledSourceIds) {
   return out
 }
 
-function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds) {
+// A range records the calendars its refresh asked for and those that failed,
+// so a reader can tell a complete range from one missing a calendar (one
+// that failed, or was turned on after the range was cached).
+function sourceList(ids) {
+  return Array.isArray(ids) ? ids.map(function(id) { return String(id || "") }).filter(function(id) { return id !== "" }) : []
+}
+
+function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds) {
   var source = store && isObject(store.ranges) ? store.ranges : {}
   var ranges = {}
   for (var key in source) ranges[key] = source[key]
@@ -74,6 +81,10 @@ function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceId
     endMs: Number(endMs) || 0,
     at: Number(nowMs) || 0,
     events: kept.slice(0, MAX_EVENTS)
+  }
+  if (Array.isArray(refreshedSourceIds)) {
+    ranges[rangeKey(scope, startMs, endMs)].sourceIds = sourceList(refreshedSourceIds)
+    ranges[rangeKey(scope, startMs, endMs)].failedSourceIds = sourceList(failedSourceIds)
   }
   var keys = Object.keys(ranges)
   keys.sort(function(a, b) { return Number(ranges[b].at) - Number(ranges[a].at) })

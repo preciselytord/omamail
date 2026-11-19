@@ -47,3 +47,15 @@ for (let i = 0; i < 20; i++)
 assert.ok(Object.keys(store.ranges).length <= cache.MAX_RANGES)
 
 console.log("test_calendar_cache.js ok")
+
+{
+  // A range names the calendars it was refreshed for and those that failed.
+  const recorded = cache.putRange(cache.emptyStore(), "", 0, 1000, [first], 40,
+    [first.sourceId, second.sourceId], [second.sourceId])
+  const range = recorded.ranges[cache.rangeKey("", 0, 1000)]
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(range.sourceIds)), [first.sourceId, second.sourceId])
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(range.failedSourceIds)), [second.sourceId])
+  const legacy = cache.putRange(cache.emptyStore(), "", 0, 1000, [first], 40)
+  assert.strictEqual(legacy.ranges[cache.rangeKey("", 0, 1000)].sourceIds, undefined,
+    "a range written without a source list claims none")
+}

@@ -462,6 +462,30 @@ fn calendar_cache_preserves_resources_and_refuses_arbitrary_paths() {
 }
 
 #[test]
+fn calendar_cache_keeps_the_calendars_in_use_and_marks_cut_ranges() {
+    let temp = Temp::new();
+    let events: Vec<_> = (0..2501).map(|i| json!({"id":i})).collect();
+    let params = json!({"name":"calendar-bar","store":{"version":3,
+        "ranges":{"\n1:2":{"startMs":1,"endMs":2,"at":3,"events":events,"sourceIds":["caldav:a"],"failedSourceIds":[]}},
+        "calendars":{"at":3,"inUse":[{"id":"caldav:a","name":"Home"},{"id":"","name":"no id"},{"name":"no id"}],"extra":true}}});
+    call_at(&temp.0, "cache.calendarPut", &params).unwrap();
+    let read = call_at(
+        &temp.0,
+        "cache.calendarRead",
+        &json!({"name":"calendar-bar"}),
+    )
+    .unwrap();
+    assert_eq!(
+        read["calendars"],
+        json!({"at":3.0,"inUse":[{"id":"caldav:a","name":"Home"}]})
+    );
+    let range = &read["ranges"]["\n1:2"];
+    assert_eq!(range["events"].as_array().unwrap().len(), 2500);
+    assert_eq!(range["truncated"], true);
+    assert_eq!(range["sourceIds"], json!(["caldav:a"]));
+}
+
+#[test]
 fn legacy_body_read_backfills_direction_without_rewriting_sender_content() {
     let temp = Temp::new();
     std::fs::create_dir_all(temp.account()).unwrap();

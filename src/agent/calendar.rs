@@ -20,7 +20,6 @@ pub const MAX_PROPOSALS: usize = 10;
 /// cache is left out: it holds only calendars with reminders on, under the
 /// same scope, and is the newest, so it would hide every other calendar.
 const CACHES: [&str; 2] = ["calendar", "calendar-bar"];
-const CALENDARS_MAX_BYTES: u64 = 1024 * 1024;
 const TITLE_MAX: usize = 200;
 const LOCATION_MAX: usize = 300;
 
@@ -141,8 +140,8 @@ pub fn validate_proposal(arguments: &Value) -> Result<Value> {
 }
 
 /// The answer to one `read_calendar` call, as the text the tool returns. A
-/// cache or calendar list that cannot be read is an error the model can
-/// report, not an empty calendar.
+/// cache that cannot be read is an error the model can report, not an empty
+/// calendar.
 pub fn read(arguments: &Value) -> Result<String> {
     let (start, end, from, to) = window(arguments)?;
     let mut stores = Vec::new();
@@ -152,155 +151,50 @@ pub fn read(arguments: &Value) -> Result<String> {
                 .map_err(|_| "agent_calendar_unavailable")?,
         );
     }
-    let calendars = enabled_calendars()?;
-    let mut answer = select(&stores, start, end, &calendars);
+    let mut answer = select(&stores, start, end);
     answer["from"] = json!(from.to_string());
     answer["to"] = json!(to.to_string());
     serde_json::to_string(&answer).map_err(|_| "agent_calendar_unavailable")
 }
 
-/// Which calendars the owner has in Omamail and whether each is on. Every
-/// calendar Omamail keeps settings for is listed in calendars.json; the one
-/// exception is the default calendar of a Google or Microsoft account
-/// (`google:<account>` / `microsoft:<account>`), which is added for each
-/// account until its settings change. Any other id is a calendar that was
-/// removed, or of an account that was, and its cached events are not read.
+/// The calendars in use, as the calendar views last recorded them: every
+/// enabled calendar of every account, by the views' own rules (enabled,
+/// signed-in accounts' default calendars, discovery). The newest record among
+/// the stores wins. A calendar not in it was disabled or removed, or belongs
+/// to an account that is gone, and its cached events are not read.
 pub struct Calendars {
-    listed: HashMap<String, Listed>,
-    accounts: Vec<String>,
-    /// The default calendar each account brings, by the UI's own rules
-    /// (Sources.withGoogleAccounts / withMicrosoftAccounts), whether or not a
-    /// view could fetch it yet: a range without it does not know that day.
-    defaults: Vec<String>,
-}
-
-struct Listed {
-    enabled: bool,
-    kind: String,
-    discovered: bool,
-    /// The account a Google, Microsoft or iCloud calendar comes with; CalDAV
-    /// calendars belong to none and appear in every account's view.
-    owner: Option<String>,
-    name: String,
+    in_use: Vec<(String, String)>,
 }
 
 impl Calendars {
-    pub fn parse(calendars: &Value, accounts: &Value) -> Self {
-        let mut listed = HashMap::new();
-        for source in calendars["sources"]
-            .as_array()
-            .map_or(&[][..], Vec::as_slice)
-        {
-            let Some(id) = source["id"].as_str() else {
-                continue;
-            };
-            let bound = matches!(
-                source["kind"].as_str(),
-                Some("google" | "microsoft" | "icloud")
-            );
-            listed.insert(
-                id.to_owned(),
-                Listed {
-                    enabled: source["enabled"] != false,
-                    kind: text(&source["kind"], 20),
-                    discovered: source["discovered"] == true,
-                    owner: bound
-                        .then(|| text(&source["accountId"], 320))
-                        .filter(|owner| !owner.is_empty()),
-                    name: text(&source["name"], 120),
-                },
-            );
-        }
-        let mut ids = Vec::new();
-        let mut defaults = Vec::new();
-        for account in accounts["accounts"]
-            .as_array()
-            .map_or(&[][..], Vec::as_slice)
-        {
-            let id = text(&account["id"], 320);
-            let id = if id.is_empty() {
-                text(&account["email"], 320)
-            } else {
-                id
-            };
-            if id.is_empty() {
+    /// The newest `calendars` record of `stores`, or None before any view
+    /// has written one.
+    pub fn newest(stores: &[Value]) -> Option<Self> {
+        let record = stores
+            .iter()
+            .map(|store| &store["calendars"])
+            .filter(|record| record["inUse"].is_array())
+            .max_by_key(|record| ms(&record["at"]))?;
+        let mut in_use = Vec::new();
+        for calendar in record["inUse"].as_array().unwrap().iter().take(1000) {
+            let id = calendar["id"].as_str().unwrap_or("");
+            if id.is_empty() || id.len() > 512 || in_use.iter().any(|(known, _)| known == id) {
                 continue;
             }
-            let discovered = |kind: &str| {
-                listed.values().any(|source: &Listed| {
-                    source.kind == kind && source.discovered && source.owner.as_deref() == Some(&id)
-                })
-            };
-            match account["provider"]
-                .as_str()
-                .unwrap_or("")
-                .trim()
-                .to_lowercase()
-                .as_str()
-            {
-                // A Gmail account's synthetic default, unless discovery listed
-                // its calendars, the primary among them.
-                "gmail" if !discovered("google") => defaults.push(format!("google:{id}")),
-                // A Microsoft one, unless discovery listed calendars and none of
-                // them is saved under the default's id.
-                "outlook" | "m365"
-                    if listed.contains_key(&format!("microsoft:{id}"))
-                        || !discovered("microsoft") =>
-                {
-                    defaults.push(format!("microsoft:{id}"))
-                }
-                _ => {}
-            }
-            ids.push(id);
+            in_use.push((id.to_owned(), text(&calendar["name"], 120)));
         }
-        Self {
-            listed,
-            accounts: ids,
-            defaults,
-        }
+        Some(Self { in_use })
     }
     pub fn allows(&self, id: &str) -> bool {
-        if let Some(listed) = self.listed.get(id) {
-            // A calendar of an account that is gone is not read, listed or not.
-            return listed.enabled
-                && listed
-                    .owner
-                    .as_ref()
-                    .is_none_or(|owner| self.accounts.contains(owner));
-        }
-        self.default_owner(id).is_some()
-    }
-    fn default_owner(&self, id: &str) -> Option<&str> {
-        let account = ["google:", "microsoft:"]
-            .iter()
-            .find_map(|prefix| id.strip_prefix(prefix))?;
-        self.accounts
-            .iter()
-            .find(|known| *known == account)
-            .map(String::as_str)
+        self.in_use.iter().any(|(known, _)| known == id)
     }
     fn name(&self, id: &str) -> String {
-        self.listed
-            .get(id)
-            .map(|listed| listed.name.clone())
+        self.in_use
+            .iter()
+            .find(|(known, _)| known == id)
+            .map(|(_, name)| name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| text(&json!(id), 120))
-    }
-    /// Enabled calendars a view can still fetch: a listed calendar of an
-    /// account that is gone fails forever and would leave every range
-    /// incomplete, so it is not required (its events are not read either
-    /// once the account is gone from both lists).
-    fn enabled_listed(&self) -> impl Iterator<Item = &String> {
-        self.listed
-            .iter()
-            .filter(|(_, listed)| {
-                listed.enabled
-                    && listed
-                        .owner
-                        .as_ref()
-                        .is_none_or(|owner| self.accounts.contains(owner))
-            })
-            .map(|(id, _)| id)
     }
     /// Display names for `ids`, each told apart from any other calendar of
     /// the same name by its id.
@@ -318,42 +212,6 @@ impl Calendars {
             })
             .collect()
     }
-}
-
-fn enabled_calendars() -> Result<Calendars> {
-    // OpenCode runs its MCP servers with an isolated XDG_CONFIG_HOME; the
-    // worker passes the owner's own configuration directory alongside it.
-    let directory = match std::env::var_os("OMAMAIL_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        Some(directory) => std::path::PathBuf::from(directory),
-        None => crate::platform::dirs::AppDirs::discover()
-            .map_err(|_| "agent_calendar_unavailable")?
-            .config_directory(),
-    };
-    if !directory.is_absolute() {
-        return Err("agent_calendar_unavailable");
-    }
-    // accounts.json also holds secrets; only account ids and providers are kept.
-    let accounts = config_json(&directory.join("accounts.json"))?;
-    let calendars = config_json(&directory.join("calendars.json"))?;
-    Ok(Calendars::parse(&calendars, &accounts))
-}
-
-/// A configuration file's JSON; a file that does not exist is null.
-fn config_json(path: &std::path::Path) -> Result<Value> {
-    use std::io::Read;
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
-        Err(_) => return Err("agent_calendar_unavailable"),
-    };
-    let mut bytes = Vec::new();
-    file.take(CALENDARS_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "agent_calendar_unavailable")?;
-    if bytes.len() as u64 > CALENDARS_MAX_BYTES {
-        return Err("agent_calendar_unavailable");
-    }
-    serde_json::from_slice(&bytes).map_err(|_| "agent_calendar_unavailable")
 }
 
 fn window(arguments: &Value) -> Result<(i64, i64, NaiveDate, NaiveDate)> {
@@ -394,22 +252,25 @@ fn midnight(day: NaiveDate) -> Option<i64> {
 }
 
 /// The events of `stores` (cache.calendarRead answers) in [start, end), from
-/// calendars the owner still has enabled.
+/// the calendars in use.
 ///
 /// A cached range counts as coverage only when it holds every calendar in
-/// use — the enabled calendars of calendars.json of accounts that still
-/// exist, each account's default calendar, and any default a view fetched —
-/// and was not cut at the event limit. A
-/// range records the calendars its refresh fetched (`sourceIds`) and those
-/// that failed (`failedSourceIds`), so a calendar that failed or was turned
-/// on later leaves it incomplete, and so does an account's default calendar a
-/// refresh could not ask for (before sign-in, offline). A range from
-/// before these lists records neither failures nor calendars, so it vouches
-/// for nothing: its events are listed, its parts are partial.
+/// use (the newest list the views recorded) and was not cut at the event
+/// limit. A range records the calendars its refresh fetched (`sourceIds`) and
+/// those that failed (`failedSourceIds`), so a calendar that failed, was
+/// turned on later, or whose account signed in later leaves it incomplete. A
+/// range from before these lists records neither, so it vouches for nothing:
+/// its events are listed, its parts are partial. Before any view recorded
+/// the calendars in use, nothing is read and the whole window is uncovered.
 /// Complete ranges are taken newest first; incomplete ones fill what is left,
 /// newest first within their scope, as `partial` parts naming the calendars
 /// they lack.
-pub fn select(stores: &[Value], start: i64, end: i64, calendars: &Calendars) -> Value {
+pub fn select(stores: &[Value], start: i64, end: i64) -> Value {
+    let Some(calendars) = Calendars::newest(stores) else {
+        return json!({"events":[],"coverage":[],
+            "uncovered":[{"from":iso(start,false),"to":iso(end,false)}],
+            "note":"Omamail has not yet recorded which calendars are in use; open its calendar once."});
+    };
     struct Range<'a> {
         scope: &'a str,
         missing: Vec<String>,
@@ -428,26 +289,7 @@ pub fn select(stores: &[Value], start: i64, end: i64, calendars: &Calendars) -> 
                 .collect()
         })
     };
-    let mut required: Vec<String> = calendars.enabled_listed().cloned().collect();
-    for id in &calendars.defaults {
-        if !required.contains(id) {
-            required.push(id.clone());
-        }
-    }
-    for store in stores {
-        for range in store["ranges"]
-            .as_object()
-            .into_iter()
-            .flat_map(|m| m.values())
-        {
-            for id in ids(&range["sourceIds"]).unwrap_or_default() {
-                if calendars.allows(&id) && !required.contains(&id) {
-                    required.push(id);
-                }
-            }
-        }
-    }
-    required.sort();
+    let required: Vec<String> = calendars.in_use.iter().map(|(id, _)| id.clone()).collect();
     let mut ranges = Vec::new();
     for store in stores {
         let Some(map) = store["ranges"].as_object() else {
@@ -680,6 +522,8 @@ mod tests {
             "calendarData":"BEGIN:VCALENDAR secret","attendees":[{"email":"x@example.org"}]})
     }
 
+    /// A store whose ranges all hold `caldav:a`, recorded as the one calendar
+    /// in use.
     fn store(ranges: Vec<(&str, i64, i64, i64, Vec<Value>)>) -> Value {
         let mut map = Map::new();
         for (scope, from, to, at, events) in ranges {
@@ -689,7 +533,14 @@ mod tests {
                     "sourceIds":["caldav:a"],"failedSourceIds":[]}),
             );
         }
-        json!({"version":3,"ranges":map})
+        json!({"version":3,"ranges":map,
+            "calendars":{"at":1,"inUse":[{"id":"caldav:a","name":"Home"}]}})
+    }
+
+    /// The calendars in use, recorded at `at`.
+    fn in_use(mut store: Value, at: i64, calendars: Value) -> Value {
+        store["calendars"] = json!({"at":at,"inUse":calendars});
+        store
     }
 
     /// A store as cached before ranges recorded their calendars.
@@ -707,14 +558,6 @@ mod tests {
             range["sourceIds"] = ids.clone();
         }
         store
-    }
-
-    /// The calendars the synthetic events come from: one CalDAV calendar.
-    fn home() -> Calendars {
-        Calendars::parse(
-            &json!({"sources":[{"id":"caldav:a","kind":"caldav","name":"Home"}]}),
-            &Value::Null,
-        )
     }
 
     fn titles(answer: &Value) -> Vec<String> {
@@ -735,11 +578,27 @@ mod tests {
             5,
             vec![event("a", "Dentist", at(3, 9), at(3, 10))],
         )]);
-        let answer = select(&[cached], at(8, 0), at(15, 0), &home());
+        let answer = select(&[cached], at(8, 0), at(15, 0));
         assert_eq!(answer["events"], json!([]));
         assert_eq!(answer["uncovered"].as_array().unwrap().len(), 1);
         assert_eq!(answer["uncovered"][0]["from"], json!(iso(at(10, 0), false)));
         assert_eq!(answer["uncovered"][0]["to"], json!(iso(at(15, 0), false)));
+    }
+
+    #[test]
+    fn nothing_is_read_before_the_calendars_in_use_are_recorded() {
+        let mut cached = store(vec![(
+            "",
+            at(1, 0),
+            at(10, 0),
+            5,
+            vec![event("a", "Dentist", at(3, 9), at(3, 10))],
+        )]);
+        cached.as_object_mut().unwrap().remove("calendars");
+        let answer = select(&[cached], at(1, 0), at(10, 0));
+        assert_eq!(answer["events"], json!([]));
+        assert_eq!(answer["uncovered"].as_array().unwrap().len(), 1);
+        assert!(answer["note"].is_string());
     }
 
     #[test]
@@ -761,16 +620,16 @@ mod tests {
             9,
             vec![event("kept", "Standup", at(5, 9), at(5, 10))],
         )]);
-        let answer = select(&[old, new], at(1, 0), at(20, 0), &home());
+        let answer = select(&[old, new], at(1, 0), at(20, 0));
         assert_eq!(titles(&answer), ["Standup", "Only old range"]);
         assert_eq!(answer["uncovered"], json!([]));
         assert!(answer.get("partial").is_none());
     }
 
     #[test]
-    fn an_account_view_holding_every_calendar_is_complete() {
-        // CalDAV calendars appear in every account's view, so with nothing
-        // tied to another account the mailbox's own view is the whole calendar.
+    fn an_account_view_holding_every_calendar_in_use_is_complete() {
+        // CalDAV calendars appear in every account's view, so a mailbox's own
+        // view can be the whole calendar.
         let account = store(vec![(
             "imap:a@example.org",
             at(1, 0),
@@ -778,94 +637,72 @@ mod tests {
             12,
             vec![event("a", "Dentist", at(20, 9), at(20, 10))],
         )]);
-        let answer = select(&[account], at(1, 0), at(31, 0), &home());
+        let answer = select(&[account], at(1, 0), at(31, 0));
         assert_eq!(titles(&answer), ["Dentist"]);
         assert_eq!(answer["uncovered"], json!([]));
         assert!(answer.get("partial").is_none());
     }
 
     #[test]
-    fn another_accounts_calendar_leaves_a_view_partial() {
-        let calendars = Calendars::parse(
-            &json!({"sources":[
-                {"id":"caldav:a","kind":"caldav","name":"Home"},
-                {"id":"google:b@example.org/work","kind":"google","accountId":"b@example.org","name":"Work"}]}),
-            &json!({"accounts":[{"id":"a@example.org"},{"id":"b@example.org"}]}),
+    fn a_calendar_in_use_that_a_range_lacks_leaves_it_partial() {
+        // Another account's calendar, a failed one, one enabled later or an
+        // account default fetched only after sign-in: all the same to a range
+        // that did not load it.
+        let calendars = json!([
+            {"id":"caldav:a","name":"Home"},
+            {"id":"google:b@example.org","name":"b@example.org"},
+            {"id":"caldav:v","name":"Vidar"}]);
+        let full = in_use(
+            recorded(
+                store(vec![(
+                    "",
+                    at(1, 0),
+                    at(10, 0),
+                    9,
+                    vec![event("b", "Before", at(5, 9), at(5, 10))],
+                )]),
+                json!(["caldav:a", "google:b@example.org", "caldav:v"]),
+            ),
+            20,
+            calendars.clone(),
         );
-        let full = recorded(
+        let mut account = recorded(
             store(vec![(
-                "",
-                at(1, 0),
-                at(10, 0),
-                9,
-                vec![event("b", "Before", at(5, 9), at(5, 10))],
-            )]),
-            json!([
-                "caldav:a",
-                "google:b@example.org/work",
-                "google:a@example.org",
-                "google:b@example.org"
-            ]),
-        );
-        let account = recorded(
-            store(vec![(
-                "a@example.org",
+                "imap:a@example.org",
                 at(1, 0),
                 at(31, 0),
                 12,
-                vec![
-                    event("dup", "Inside full", at(4, 9), at(4, 10)),
-                    event("a", "After", at(20, 9), at(20, 10)),
-                ],
+                vec![event("a", "After", at(20, 9), at(20, 10))],
             )]),
-            json!(["caldav:a", "google:a@example.org"]),
+            json!(["caldav:a", "caldav:v"]),
         );
-        let answer = select(&[full, account], at(1, 0), at(31, 0), &calendars);
+        for range in account["ranges"].as_object_mut().unwrap().values_mut() {
+            range["failedSourceIds"] = json!(["caldav:v"]);
+        }
+        let answer = select(&[full, account], at(1, 0), at(31, 0));
         assert_eq!(titles(&answer), ["Before", "After"]);
         assert_eq!(answer["uncovered"][0]["from"], json!(iso(at(10, 0), false)));
         assert_eq!(answer["partial"][0]["from"], json!(iso(at(10, 0), false)));
         assert_eq!(
             answer["partial"][0]["missing"],
-            json!(["google:b@example.org", "Work"])
+            json!(["b@example.org", "Vidar"])
         );
     }
 
     #[test]
-    fn a_failed_or_later_enabled_calendar_leaves_a_recorded_range_partial() {
-        let calendars = Calendars::parse(
-            &json!({"sources":[
-                {"id":"caldav:a","kind":"caldav","name":"Home"},
-                {"id":"caldav:v","kind":"caldav","name":"Vidar"},
-                {"id":"caldav:new","kind":"caldav","name":"New"}]}),
-            &Value::Null,
+    fn the_newest_record_of_calendars_in_use_is_the_one_judged_against() {
+        // A calendar enabled after the range was cached appears in the newer
+        // record; the range lacks it.
+        let range = store(vec![("", at(1, 0), at(10, 0), 10, vec![])]);
+        let newer = in_use(
+            json!({"version":3,"ranges":{}}),
+            30,
+            json!([{"id":"caldav:a","name":"Home"},{"id":"caldav:new","name":"New"}]),
         );
-        let mut range = store(vec![(
-            "",
-            at(1, 0),
-            at(10, 0),
-            9,
-            vec![event("a", "Home event", at(5, 9), at(5, 10))],
-        )]);
-        let key = range["ranges"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
-        range["ranges"][&key]["sourceIds"] = json!(["caldav:a", "caldav:v"]);
-        range["ranges"][&key]["failedSourceIds"] = json!(["caldav:v"]);
-        let answer = select(&[range.clone()], at(1, 0), at(10, 0), &calendars);
-        assert_eq!(titles(&answer), ["Home event"]);
-        assert_eq!(answer["coverage"], json!([]));
-        assert_eq!(answer["uncovered"].as_array().unwrap().len(), 1);
-        assert_eq!(answer["partial"][0]["missing"], json!(["New", "Vidar"]));
-        // Once every calendar in use loaded, the same range is complete.
-        range["ranges"][&key]["sourceIds"] = json!(["caldav:a", "caldav:v", "caldav:new"]);
-        range["ranges"][&key]["failedSourceIds"] = json!([]);
-        let answer = select(&[range], at(1, 0), at(10, 0), &calendars);
+        let answer = select(&[range.clone(), newer], at(1, 0), at(10, 0));
+        assert_eq!(answer["partial"][0]["missing"], json!(["New"]));
+        let answer = select(&[range], at(1, 0), at(10, 0));
         assert_eq!(answer["uncovered"], json!([]));
-        assert!(answer.get("partial").is_none());
     }
 
     #[test]
@@ -879,79 +716,11 @@ mod tests {
             10,
             vec![event("a", "Dentist", at(3, 9), at(3, 10))],
         )]));
-        let answer = select(&[old], at(1, 0), at(10, 0), &home());
+        let answer = select(&[old], at(1, 0), at(10, 0));
         assert_eq!(titles(&answer), ["Dentist"]);
         assert_eq!(answer["coverage"], json!([]));
         assert_eq!(answer["uncovered"].as_array().unwrap().len(), 1);
         assert_eq!(answer["partial"][0]["missing"], json!(["Home"]));
-    }
-
-    #[test]
-    fn every_accounts_default_calendar_is_required() {
-        // A Gmail account's default calendar must be in a range, even one no
-        // view ever fetched (a refresh before sign-in, or offline).
-        let calendars = Calendars::parse(
-            &json!({"sources":[{"id":"caldav:a","kind":"caldav","name":"Home"}]}),
-            &json!({"accounts":[{"id":"new@example.org","provider":"gmail"},
-                {"id":"imap:x@example.org","provider":"imap"},
-                {"id":"plain@example.org"}]}),
-        );
-        let offline = store(vec![("", at(1, 0), at(10, 0), 60, vec![])]);
-        let answer = select(&[offline], at(1, 0), at(10, 0), &calendars);
-        assert_eq!(
-            answer["partial"][0]["missing"],
-            json!(["google:new@example.org"])
-        );
-        let fetched = recorded(
-            store(vec![("", at(1, 0), at(10, 0), 60, vec![])]),
-            json!(["caldav:a", "google:new@example.org"]),
-        );
-        let answer = select(&[fetched], at(1, 0), at(10, 0), &calendars);
-        assert_eq!(answer["uncovered"], json!([]));
-    }
-
-    #[test]
-    fn a_discovered_primary_stands_in_for_the_default() {
-        let calendars = Calendars::parse(
-            &json!({"sources":[
-                {"id":"caldav:a","kind":"caldav","name":"Home"},
-                {"id":"google:me@example.org/primary","kind":"google","accountId":"me@example.org",
-                 "discovered":true,"name":"Me"},
-                {"id":"microsoft:ms@example.org/cal","kind":"microsoft","accountId":"ms@example.org",
-                 "discovered":true,"name":"Work"}]}),
-            &json!({"accounts":[{"id":"me@example.org","provider":"gmail"},
-                {"id":"ms@example.org","provider":"m365"}]}),
-        );
-        let range = recorded(
-            store(vec![("", at(1, 0), at(10, 0), 60, vec![])]),
-            json!([
-                "caldav:a",
-                "google:me@example.org/primary",
-                "microsoft:ms@example.org/cal"
-            ]),
-        );
-        let answer = select(&[range], at(1, 0), at(10, 0), &calendars);
-        assert_eq!(answer["uncovered"], json!([]));
-    }
-
-    #[test]
-    fn a_listed_calendar_of_a_removed_account_is_not_read() {
-        let calendars = Calendars::parse(
-            &json!({"sources":[
-                {"id":"caldav:a","kind":"caldav","name":"Home"},
-                {"id":"microsoft:old@example.org/cal","kind":"microsoft","accountId":"old@example.org",
-                 "discovered":true,"name":"Old work"}]}),
-            &Value::Null,
-        );
-        let mut old = event("o", "Old meeting", at(2, 9), at(2, 10));
-        old["sourceId"] = json!("microsoft:old@example.org/cal");
-        let answer = select(
-            &[store(vec![("", at(1, 0), at(10, 0), 60, vec![old])])],
-            at(1, 0),
-            at(10, 0),
-            &calendars,
-        );
-        assert_eq!(answer["events"], json!([]));
     }
 
     #[test]
@@ -960,132 +729,47 @@ mod tests {
         for range in cut["ranges"].as_object_mut().unwrap().values_mut() {
             range["truncated"] = json!(true);
         }
-        let answer = select(&[cut], at(1, 0), at(10, 0), &home());
+        let answer = select(&[cut], at(1, 0), at(10, 0));
         assert_eq!(answer["coverage"], json!([]));
         assert_eq!(answer["partial"][0]["truncated"], true);
     }
 
     #[test]
-    fn a_calendar_of_a_removed_account_is_not_required() {
-        let calendars = Calendars::parse(
-            &json!({"sources":[
-                {"id":"caldav:a","kind":"caldav","name":"Home"},
-                {"id":"google:old@example.org/work","kind":"google","accountId":"old@example.org","name":"Old"}]}),
-            &Value::Null,
-        );
-        let answer = select(
-            &[store(vec![("", at(1, 0), at(10, 0), 10, vec![])])],
-            at(1, 0),
-            at(10, 0),
-            &calendars,
-        );
-        assert_eq!(answer["uncovered"], json!([]));
-    }
-
-    #[test]
-    fn missing_calendars_with_one_name_are_told_apart() {
-        let calendars = Calendars::parse(
-            &json!({"sources":[
-                {"id":"caldav:a","kind":"caldav","name":"Home"},
-                {"id":"caldav:x","kind":"caldav","name":"Calendar"},
-                {"id":"caldav:y","kind":"caldav","name":"Calendar"}]}),
-            &Value::Null,
-        );
-        let answer = select(
-            &[store(vec![("", at(1, 0), at(10, 0), 10, vec![])])],
-            at(1, 0),
-            at(10, 0),
-            &calendars,
-        );
-        assert_eq!(
-            answer["partial"][0]["missing"],
-            json!(["Calendar (caldav:x)", "Calendar (caldav:y)"])
-        );
-    }
-
-    #[test]
-    fn a_default_account_calendar_seen_by_a_view_is_required_of_others() {
-        // google:b@example.org is never listed, but the bar fetched it, so an
-        // older view without it is not the whole calendar.
-        let calendars = Calendars::parse(
-            &json!({"sources":[{"id":"caldav:a","kind":"caldav","name":"Home"}]}),
-            &json!({"accounts":[{"id":"b@example.org"}]}),
-        );
-        let mut bar = store(vec![("", at(1, 0), at(5, 0), 9, vec![])]);
-        let key = bar["ranges"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
-        bar["ranges"][&key]["sourceIds"] = json!(["caldav:a", "google:b@example.org"]);
-        let mut view = store(vec![("", at(10, 0), at(20, 0), 3, vec![])]);
-        let key = view["ranges"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
-        view["ranges"][&key]["sourceIds"] = json!(["caldav:a"]);
-        let answer = select(&[bar, view], at(10, 0), at(20, 0), &calendars);
-        assert_eq!(
-            answer["partial"][0]["missing"],
-            json!(["google:b@example.org"])
-        );
-    }
-
-    #[test]
-    fn disabled_and_removed_calendars_are_not_read() {
-        let calendars = Calendars::parse(
-            &json!({"sources":[
-                {"id":"caldav:on","enabled":true},
-                {"id":"caldav:off","enabled":false},
-                {"id":"google:me@example.org/work","enabled":false}]}),
-            &json!({"accounts":[{"id":"me@example.org","clientSecret":"x"}]}),
-        );
+    fn calendars_not_in_use_are_not_read() {
+        // Disabled, removed, or of an account that is gone: not in the
+        // views' record, so never read, whatever the cache still holds.
         let mut on = event("1", "On", at(2, 9), at(2, 10));
-        on["sourceId"] = json!("caldav:on");
+        on["sourceId"] = json!("caldav:a");
         let mut off = event("2", "Off", at(2, 11), at(2, 12));
         off["sourceId"] = json!("caldav:off");
-        let mut removed = event("3", "Removed", at(2, 13), at(2, 14));
-        removed["sourceId"] = json!("caldav:removed");
-        let mut google = event("4", "Google", at(2, 15), at(2, 16));
-        google["sourceId"] = json!("google:me@example.org");
-        let mut hidden = event("5", "Hidden", at(2, 17), at(2, 18));
-        hidden["sourceId"] = json!("google:me@example.org/work");
-        // Removed accounts and non-default calendars that are no longer listed.
-        let mut gone_account = event("6", "Gone account", at(2, 19), at(2, 20));
-        gone_account["sourceId"] = json!("microsoft:old@example.org");
-        let mut icloud = event("7", "iCloud", at(2, 21), at(2, 22));
-        icloud["sourceId"] = json!("icloud:acct:0123abcd");
-        let mut other = event("8", "Other Google", at(3, 9), at(3, 10));
-        other["sourceId"] = json!("google:acct:0123abcd");
+        let mut stale = event("3", "Stale default", at(2, 13), at(2, 14));
+        stale["sourceId"] = json!("google:me@example.org");
+        let mut gone = event("4", "Gone account", at(2, 15), at(2, 16));
+        gone["sourceId"] = json!("microsoft:old@example.org/cal");
         let cached = store(vec![(
             "",
             at(1, 0),
             at(5, 0),
             1,
-            vec![
-                on,
-                off,
-                removed,
-                google,
-                hidden,
-                gone_account,
-                icloud,
-                other,
-            ],
+            vec![on, off, stale, gone],
         )]);
-        let answer = select(&[cached], at(1, 0), at(5, 0), &calendars);
-        let titles: Vec<_> = answer["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|e| e["title"].as_str().unwrap())
-            .collect();
-        assert_eq!(titles, ["On", "Google"]);
+        let answer = select(&[cached], at(1, 0), at(5, 0));
+        assert_eq!(titles(&answer), ["On"]);
+    }
+
+    #[test]
+    fn missing_calendars_with_one_name_are_told_apart() {
+        let cached = in_use(
+            store(vec![("", at(1, 0), at(10, 0), 10, vec![])]),
+            2,
+            json!([{"id":"caldav:a","name":"Home"},
+                {"id":"caldav:x","name":"Calendar"},{"id":"caldav:y","name":"Calendar"}]),
+        );
+        let answer = select(&[cached], at(1, 0), at(10, 0));
+        assert_eq!(
+            answer["partial"][0]["missing"],
+            json!(["Calendar (caldav:x)", "Calendar (caldav:y)"])
+        );
     }
 
     #[test]
@@ -1102,7 +786,7 @@ mod tests {
             5,
             vec![event("a", "Line\nbreak", at(3, 9), at(3, 10))],
         )]);
-        let answer = select(&[cached], at(1, 0), at(10, 0), &home());
+        let answer = select(&[cached], at(1, 0), at(10, 0));
         let wire = answer.to_string();
         assert!(!wire.contains("VCALENDAR") && !wire.contains("x@example.org"));
         assert_eq!(answer["events"][0]["title"], "Line break");
@@ -1176,7 +860,6 @@ mod tests {
             &[store(vec![("", at(1, 0), at(10, 0), 1, vec![cached])])],
             at(1, 0),
             at(10, 0),
-            &home(),
         );
         assert_eq!(answer["events"][0]["start"], "2030-03-05");
         assert_eq!(answer["events"][0]["end"], "2030-03-07");

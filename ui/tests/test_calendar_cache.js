@@ -64,3 +64,15 @@ console.log("test_calendar_cache.js ok")
   assert.strictEqual(legacy.ranges[cache.rangeKey("", 0, 1000)].sourceIds, undefined,
     "a range written without a source list claims none")
 }
+
+{
+  // The newest write records the calendars in use; a write without a list
+  // keeps the last one.
+  const sources = [{ id: "caldav:a", name: "Home" }, { id: "caldav:off", name: "Off", enabled: false },
+    { id: "google:me@example.com", name: "me@example.com" }]
+  const written = cache.putRange(cache.emptyStore(), "", 0, 1000, [], 60, [], [], [], sources)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(written.calendars)), { at: 60, inUse: [
+    { id: "caldav:a", name: "Home" }, { id: "google:me@example.com", name: "me@example.com" }] })
+  const kept = cache.putRange(written, "", 1000, 2000, [], 70)
+  assert.strictEqual(kept.calendars.at, 60, "a write with no list keeps the last one")
+}

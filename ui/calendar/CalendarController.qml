@@ -1100,7 +1100,8 @@ Item {
       if (rangeStart && rangeEnd && refreshScope === calendarScope)
         eventCache.put(refreshScope, rangeStart, rangeEnd, events,
           contextSources.sources.filter(function(source) { return root.sourceIncluded(source) }).map(function(source) { return String(source.id) }),
-          failedSourceIds, refreshSourceIds)
+          failedSourceIds, refreshSourceIds,
+          reminderMode ? null : (availableSources && availableSources.sources) || [])
       var nextStart = pendingRangeStart
       var nextEnd = pendingRangeEnd
       pendingRangeStart = 0

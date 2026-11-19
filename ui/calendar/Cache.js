@@ -67,7 +67,21 @@ function sourceList(ids) {
   return Array.isArray(ids) ? ids.map(function(id) { return String(id || "") }).filter(function(id) { return id !== "" }) : []
 }
 
-function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds, fetchedSourceIds) {
+// The calendars in use when a range was written: every enabled calendar of
+// every account, as the views know them. A reader judges each range against
+// the newest list instead of re-deriving the views' rules.
+function calendarsInUse(sources) {
+  var list = Array.isArray(sources) ? sources : []
+  var out = []
+  for (var i = 0; i < list.length && out.length < 1000; i++) {
+    var source = list[i]
+    if (!source || source.enabled === false || String(source.id || "") === "") continue
+    out.push({ id: String(source.id), name: String(source.name || "").substring(0, 200) })
+  }
+  return out
+}
+
+function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceIds, failedSourceIds, fetchedSourceIds, inUse) {
   var source = store && isObject(store.ranges) ? store.ranges : {}
   var ranges = {}
   for (var key in source) ranges[key] = source[key]
@@ -93,5 +107,10 @@ function putRange(store, scope, startMs, endMs, events, nowMs, refreshedSourceId
   var keys = Object.keys(ranges)
   keys.sort(function(a, b) { return Number(ranges[b].at) - Number(ranges[a].at) })
   for (var i = MAX_RANGES; i < keys.length; i++) delete ranges[keys[i]]
-  return { version: VERSION, ranges: ranges }
+  var next = { version: VERSION, ranges: ranges }
+  if (Array.isArray(inUse))
+    next.calendars = { at: Number(nowMs) || 0, inUse: calendarsInUse(inUse) }
+  else if (store && isObject(store.calendars))
+    next.calendars = store.calendars
+  return next
 }

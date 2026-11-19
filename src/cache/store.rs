@@ -102,6 +102,25 @@ fn normalize_calendar(value: &Value) -> Value {
     if value["version"].as_u64() != Some(3) {
         return out;
     }
+    // The calendars in use when a view last wrote, which the assistant's
+    // calendar reader judges coverage against.
+    if let (Some(at), Some(list)) = (
+        value["calendars"]["at"].as_f64(),
+        value["calendars"]["inUse"].as_array(),
+    ) {
+        let in_use: Vec<Value> = list
+            .iter()
+            .filter_map(|c| {
+                let id = c["id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty() && id.len() <= 512)?;
+                let name: String = c["name"].as_str().unwrap_or("").chars().take(200).collect();
+                Some(json!({"id":id,"name":name}))
+            })
+            .take(1000)
+            .collect();
+        out["calendars"] = json!({"at":at,"inUse":in_use});
+    }
     if let Some(ranges) = value["ranges"].as_object() {
         let mut entries: Vec<_> = ranges.iter().collect();
         entries.sort_by(|a, b| {

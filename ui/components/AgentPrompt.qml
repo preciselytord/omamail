@@ -43,6 +43,23 @@ FocusScope {
     return ({subject:"",body:"",applicable:false})
   }
   signal applyProposalRequested(var envelope, string parentId)
+  // An event the agent suggested opens the calendar's composer, filled in;
+  // the owner picks the calendar and saves. Nothing is written from here.
+  function addProposedEvent(event) {
+    var controller = service ? service.calendarController : null
+    if (!event || !controller) return false
+    if ((controller.writableSourceGroups || []).length === 0) {
+      localError = "No calendar to add it to: add one in the calendar's settings first"
+      return false
+    }
+    if (controller.composerHeld) { localError = "Finish the event you are editing first"; return false }
+    localError = ""
+    var prefill = Agent.eventPrefill(event, String(event.accountId || accountId))
+    // The owner asked for this one; no message "put it" any way.
+    prefill.description = prefill.description.replace(/, as the message put it\./g, ".")
+    controller.composeRequested(prefill)
+    return true
+  }
   readonly property string routingChangedText: "The sender, recipients or quoted history changed. Edit the draft to send with your current choices."
   function proposalRoutingChanged(envelope) {
     return !!proposalComposer && typeof proposalComposer.proposalRoutingChanged === "function"
@@ -507,7 +524,7 @@ FocusScope {
                 width: parent.width
                 active: entryRole === "proposal"
                 property var proposal: root.proposalFor(entryText)
-                sourceComponent: proposalTemplate
+                sourceComponent: proposal.kind === "event" ? eventProposalTemplate : proposalTemplate
               }
               Rectangle {
                 anchors.fill: parent
@@ -548,6 +565,23 @@ FocusScope {
                 wrapMode: TextEdit.Wrap
                 Accessible.name: entryRole === "assistant" ? "AI reply" : entryRole
               }
+            }
+          }
+          Component {
+            id: eventProposalTemplate
+            EventSuggestionCard {
+              objectName: "agent-event-proposal"
+              width: parent.width
+              suggestions: [parent.proposal]
+              heading: "Suggested event"
+              foldable: false
+              dismissable: false
+              textColor: root.textColor
+              accentColor: root.accentColor
+              dimColor: root.dimColor
+              dimmerColor: root.popupBorderColor
+              panelFontFamily: root.panelFontFamily
+              onAddRequested: function(event) { root.addProposedEvent(event) }
             }
           }
           Component {

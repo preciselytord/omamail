@@ -12,6 +12,11 @@ Rectangle {
   id: root
 
   property var suggestions: []
+  // The chat panel shows one suggestion the owner asked for: its own
+  // heading, open from the start, and nothing to dismiss.
+  property string heading: ""
+  property bool foldable: true
+  property bool dismissable: true
 
   required property color textColor
   required property color accentColor
@@ -26,9 +31,9 @@ Rectangle {
   // Folded until asked: a guess about somebody else's mail is a line above
   // the message, not a panel over it. The heading says how many were found
   // and opens on a click; a new look's findings fold again.
-  property bool expanded: false
+  property bool expanded: !foldable
   readonly property string lookId: rows.length > 0 ? String(rows[0].jobId || "") : ""
-  onLookIdChanged: expanded = false
+  onLookIdChanged: expanded = !foldable
   visible: rows.length > 0
   implicitHeight: visible ? column.implicitHeight + Style.space(24) : 0
   height: implicitHeight
@@ -61,7 +66,8 @@ Rectangle {
         Text {
           id: heading
           objectName: "suggestionHeading"
-          text: root.rows.length === 1 ? "The agent found an event in this message"
+          text: root.heading !== "" ? root.heading
+            : root.rows.length === 1 ? "The agent found an event in this message"
             : "The agent found " + root.rows.length + " events in this message"
           color: root.textColor
           font.family: root.panelFontFamily
@@ -72,14 +78,15 @@ Rectangle {
       }
       ActionIcon {
         objectName: "suggestionFold"
+        visible: root.foldable
         name: root.expanded ? "chevronDown" : "chevronRight"
         iconSize: Style.font.icon
         color: root.dimColor
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
       }
-      TapHandler { onTapped: root.expanded = !root.expanded }
-      HoverHandler { cursorShape: Qt.PointingHandCursor }
+      TapHandler { enabled: root.foldable; onTapped: root.expanded = !root.expanded }
+      HoverHandler { enabled: root.foldable; cursorShape: Qt.PointingHandCursor }
     }
 
     Repeater {
@@ -152,6 +159,7 @@ Rectangle {
           }
           IconTextButton {
             objectName: "suggestionDismiss"
+            visible: root.dismissable
             iconName: "close"
             text: "Dismiss"
             foreground: root.dimColor

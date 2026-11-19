@@ -91,6 +91,24 @@ fn collect(store: &super::storage::Store, id: &str, history: bool) -> Result<Val
             .as_array()
             .filter(|a| a.len() <= MAX_PROPOSALS)
             .ok_or("agent_invalid_proposal")?;
+        // Event suggestions follow the drafts of their turn once reversed.
+        let events = store
+            .read_json(&current, "event-proposals.json", MAX_BYTES)?
+            .unwrap_or_else(|| json!([]));
+        let events = events
+            .as_array()
+            .filter(|a| a.len() <= super::calendar::MAX_PROPOSALS)
+            .ok_or("agent_invalid_proposal")?;
+        for (index, event) in events.iter().enumerate().rev() {
+            let item = event_card(event, &current, index, &job)?;
+            budget += serde_json::to_vec(&item)
+                .map_err(|_| "agent_invalid_proposal")?
+                .len();
+            if budget > MAX_HISTORY_BYTES {
+                return Err("agent_proposal_limit");
+            }
+            result.push(item);
+        }
         // Traverse newest turns first, but reverse proposals within each turn
         // too: the final reversal must preserve tool invocation order.
         for (index, proposal) in list.iter().enumerate().rev() {
@@ -126,6 +144,41 @@ fn collect(store: &super::storage::Store, id: &str, history: bool) -> Result<Val
     }
     result.reverse();
     Ok(json!(result))
+}
+
+/// A stored event suggestion as the UI receives it: the validated event
+/// record, its owner, and `kind: "event"`. Anything else on disk is refused.
+fn event_card(
+    event: &Value,
+    job_id: &str,
+    index: usize,
+    job: &Value,
+) -> Result<Value, &'static str> {
+    let object = event.as_object().ok_or("agent_invalid_proposal")?;
+    let mut record = serde_json::Map::new();
+    for (key, value) in object {
+        match key.as_str() {
+            "id" | "jobId" | "accountId" | "messageId" | "afterTurn" => {}
+            _ => {
+                record.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    super::events::validate(&json!([record])).map_err(|_| "agent_invalid_proposal")?;
+    if event["id"] != format!("{job_id}-e{index}")
+        || event["jobId"] != job_id
+        || event["accountId"] != job["accountId"]
+        || event["messageId"] != job["messageId"]
+        || !event["afterTurn"].is_u64()
+    {
+        return Err("agent_invalid_proposal");
+    }
+    let mut item = Value::Object(record);
+    for key in ["id", "jobId", "accountId", "messageId", "afterTurn"] {
+        item[key] = event[key].clone();
+    }
+    item["kind"] = json!("event");
+    Ok(item)
 }
 
 pub fn tool() -> Value {

@@ -80,6 +80,12 @@ pub(super) fn label(name: &Value) -> &'static str {
         "propose_draft" | "mcp__omamail__propose_draft" | "omamail_propose_draft" => {
             "Creating draft"
         }
+        "read_calendar" | "mcp__omamail__read_calendar" | "omamail_read_calendar" => {
+            "Reading the calendar"
+        }
+        "propose_event" | "mcp__omamail__propose_event" | "omamail_propose_event" => {
+            "Suggesting an event"
+        }
         "Bash" => "Running a command",
         "Read" => "Reading a file",
         "Write" => "Writing a file",

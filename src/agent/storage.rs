@@ -53,6 +53,7 @@ fn filename(name: &str) -> Result<CString> {
             | "context.json"
             | "display.json"
             | "proposals.json"
+            | "event-proposals.json"
             | "cancel.json"
             | "next.json"
             | "bootstrap.json"

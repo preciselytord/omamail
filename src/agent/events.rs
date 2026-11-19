@@ -66,40 +66,43 @@ pub fn parse(output: &str) -> Vec<Value> {
         if out.len() >= EVENTS_MAX {
             break;
         }
-        let Some(item) = item.as_object() else {
-            continue;
-        };
-        let title = clean(item.get("title"), false, TITLE_MAX);
-        if title.is_empty() {
-            continue;
+        if let Some(event) = item.as_object().and_then(record) {
+            out.push(event);
         }
-        let mut all_day = item.get("allDay") == Some(&Value::Bool(true));
-        let Some((start_ms, day_only)) = parse_when(item.get("start"), all_day) else {
-            continue;
-        };
-        all_day = all_day || day_only;
-        let end_ms = match parse_when(item.get("end"), all_day) {
-            Some((end, _)) if end > start_ms => end,
-            _ if all_day => next_local_midnight_ms(start_ms),
-            _ => start_ms + 3_600_000,
-        };
-        let confidence = item
-            .get("confidence")
-            .and_then(Value::as_f64)
-            .map_or(0.5, |c| c.clamp(0.0, 1.0));
-        out.push(json!({
-            "title": title,
-            "start": clean(item.get("start"), false, WHEN_MAX),
-            "end": clean(item.get("end"), false, WHEN_MAX),
-            "startMs": start_ms,
-            "endMs": end_ms,
-            "allDay": all_day,
-            "location": clean(item.get("location"), false, LOCATION_MAX),
-            "notes": clean(item.get("notes"), true, NOTES_MAX),
-            "confidence": confidence,
-        }));
     }
     out
+}
+
+/// One event object as the agent wrote it, made into the bounded record a
+/// job carries: a title and a start or nothing, times as epoch milliseconds.
+pub fn record(item: &serde_json::Map<String, Value>) -> Option<Value> {
+    let title = clean(item.get("title"), false, TITLE_MAX);
+    if title.is_empty() {
+        return None;
+    }
+    let mut all_day = item.get("allDay") == Some(&Value::Bool(true));
+    let (start_ms, day_only) = parse_when(item.get("start"), all_day)?;
+    all_day = all_day || day_only;
+    let end_ms = match parse_when(item.get("end"), all_day) {
+        Some((end, _)) if end > start_ms => end,
+        _ if all_day => next_local_midnight_ms(start_ms),
+        _ => start_ms + 3_600_000,
+    };
+    let confidence = item
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .map_or(0.5, |c| c.clamp(0.0, 1.0));
+    Some(json!({
+        "title": title,
+        "start": clean(item.get("start"), false, WHEN_MAX),
+        "end": clean(item.get("end"), false, WHEN_MAX),
+        "startMs": start_ms,
+        "endMs": end_ms,
+        "allDay": all_day,
+        "location": clean(item.get("location"), false, LOCATION_MAX),
+        "notes": clean(item.get("notes"), true, NOTES_MAX),
+        "confidence": confidence,
+    }))
 }
 
 /// What the answer says about how many it found, for the job's own line.

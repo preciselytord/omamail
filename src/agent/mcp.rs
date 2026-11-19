@@ -23,49 +23,139 @@ pub fn run(id: &str) -> Result<(), &'static str> {
     serve(
         std::io::stdin().lock(),
         std::io::stdout().lock(),
-        |arguments, _meta| {
-            let content = proposals::validate(arguments)?;
-            let store = Store::open()?;
-            let job = jobs::refresh(&store, id)?;
-            if job["state"] != "running"
-                || job["kind"] == "events"
-                || store.read_json(id, "cancel.json", 64)?.is_some()
-            {
-                return Err("agent_proposal_inactive");
+        |tool, arguments| match tool {
+            Tool::ReadCalendar => super::calendar::read(arguments),
+            Tool::ProposeDraft => {
+                let content = proposals::validate(arguments)?;
+                record(
+                    id,
+                    "proposals.json",
+                    proposals::MAX_PROPOSALS,
+                    |store, list, after_turn| {
+                        let job = jobs::read_job(store, id)?;
+                        let proposal_id = format!("{id}-{}", list.len());
+                        list.push(
+                            json!({"id":proposal_id,"jobId":id,"accountId":job["accountId"],
+                        "afterTurn":after_turn,
+                        "draftKey":job["draftKey"],"messageId":job["messageId"],
+                        "subject":content["subject"],"body":content["body"]}),
+                        );
+                        Ok(proposal_id)
+                    },
+                )
             }
-            let mut proposals = store
-                .read_json(id, "proposals.json", proposals::MAX_BYTES)?
-                .unwrap_or_else(|| json!([]));
-            let list = proposals.as_array_mut().ok_or("agent_invalid_proposal")?;
-            if list.len() >= proposals::MAX_PROPOSALS {
-                return Err("agent_proposal_limit");
+            Tool::ProposeEvent => {
+                let event = super::calendar::validate_proposal(arguments)?;
+                record(
+                    id,
+                    "event-proposals.json",
+                    super::calendar::MAX_PROPOSALS,
+                    |store, list, after_turn| {
+                        let job = jobs::read_job(store, id)?;
+                        let proposal_id = format!("{id}-e{}", list.len());
+                        let mut item = event.clone();
+                        for (key, value) in [
+                            ("id", json!(proposal_id)),
+                            ("jobId", json!(id)),
+                            ("accountId", job["accountId"].clone()),
+                            ("messageId", job["messageId"].clone()),
+                            ("afterTurn", json!(after_turn)),
+                        ] {
+                            item[key] = value;
+                        }
+                        list.push(item);
+                        Ok(proposal_id)
+                    },
+                )
             }
-            let proposal_id = format!("{id}-{}", list.len());
-            let display = jobs::saved_display(&store, id)?;
-            let after_turn = display["transcript"].as_array().map_or(0, Vec::len);
-            list.push(
-                json!({"id":proposal_id,"jobId":id,"accountId":job["accountId"],
-            "afterTurn":after_turn,
-            "draftKey":job["draftKey"],"messageId":job["messageId"],
-            "subject":content["subject"],"body":content["body"]}),
-            );
-            if serde_json::to_vec(&proposals)
-                .map_err(|_| "agent_invalid_proposal")?
-                .len()
-                > proposals::MAX_BYTES
-            {
-                return Err("agent_proposal_limit");
-            }
-            store.write_json(id, "proposals.json", &proposals)?;
-            Ok(proposal_id)
         },
     )
+}
+
+/// Append one proposal under the job's lock-free ownership checks shared by
+/// both kinds: the turn is running, not a look, and not cancelled.
+fn record(
+    id: &str,
+    file: &str,
+    limit: usize,
+    push: impl FnOnce(&Store, &mut Vec<Value>, usize) -> Result<String, &'static str>,
+) -> Result<String, &'static str> {
+    let store = Store::open()?;
+    let job = jobs::refresh(&store, id)?;
+    if job["state"] != "running"
+        || job["kind"] == "events"
+        || store.read_json(id, "cancel.json", 64)?.is_some()
+    {
+        return Err("agent_proposal_inactive");
+    }
+    let mut saved = store
+        .read_json(id, file, proposals::MAX_BYTES)?
+        .unwrap_or_else(|| json!([]));
+    let list = saved.as_array_mut().ok_or("agent_invalid_proposal")?;
+    if list.len() >= limit {
+        return Err("agent_proposal_limit");
+    }
+    let display = jobs::saved_display(&store, id)?;
+    let after_turn = display["transcript"].as_array().map_or(0, Vec::len);
+    let proposal_id = push(&store, list, after_turn)?;
+    if serde_json::to_vec(&saved)
+        .map_err(|_| "agent_invalid_proposal")?
+        .len()
+        > proposals::MAX_BYTES
+    {
+        return Err("agent_proposal_limit");
+    }
+    store.write_json(id, file, &saved)?;
+    Ok(format!(
+        "{} {proposal_id} recorded for the owner's review. {}",
+        if file == "proposals.json" {
+            "Proposal"
+        } else {
+            "Event suggestion"
+        },
+        if file == "proposals.json" {
+            "No mail was edited or sent."
+        } else {
+            "No calendar was changed."
+        }
+    ))
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Tool {
+    ProposeDraft,
+    ReadCalendar,
+    ProposeEvent,
+}
+
+impl Tool {
+    fn named(name: &str) -> Option<Self> {
+        match name {
+            "propose_draft" => Some(Self::ProposeDraft),
+            "read_calendar" => Some(Self::ReadCalendar),
+            "propose_event" => Some(Self::ProposeEvent),
+            _ => None,
+        }
+    }
+    fn refusal(self, reason: &str) -> String {
+        match self {
+            Self::ProposeDraft => format!(
+                "Proposal refused ({reason}). Check subject/body and whether this turn is still active."
+            ),
+            Self::ProposeEvent => format!(
+                "Event suggestion refused ({reason}). Check title, start and end, and whether this turn is still active."
+            ),
+            Self::ReadCalendar => format!(
+                "Calendar read refused ({reason}). Ask for one window of at most 31 days as from/to YYYY-MM-DD."
+            ),
+        }
+    }
 }
 
 fn serve(
     mut input: impl BufRead,
     mut output: impl Write,
-    mut accept: impl FnMut(&Value, &Value) -> Result<String, &'static str>,
+    mut handle: impl FnMut(Tool, &Value) -> Result<String, &'static str>,
 ) -> Result<(), &'static str> {
     let mut initialized = false;
     let mut processed = 0;
@@ -108,19 +198,23 @@ fn serve(
                     )
                 }
                 "ping" => Ok(json!({})),
-                "tools/list" if initialized => Ok(json!({"tools":[proposals::tool()]})),
+                "tools/list" if initialized => Ok(
+                    json!({"tools":[proposals::tool(),super::calendar::read_tool(),super::calendar::propose_tool()]}),
+                ),
                 "resources/list" if initialized => Ok(json!({"resources":[]})),
                 "resources/templates/list" if initialized => Ok(json!({"resourceTemplates":[]})),
-                "tools/call" if initialized && request["params"]["name"] == "propose_draft" => {
-                    let args = &request["params"]["arguments"];
-                    match proposals::validate(args)
-                        .and_then(|_| accept(args, &request["params"]["_meta"]))
-                    {
-                        Ok(proposal) => Ok(
-                            json!({"content":[{"type":"text","text":format!("Proposal {proposal} recorded for review. No mail was edited or sent.")}]}),
-                        ),
+                "tools/call"
+                    if initialized
+                        && request["params"]["name"]
+                            .as_str()
+                            .and_then(Tool::named)
+                            .is_some() =>
+                {
+                    let tool = Tool::named(request["params"]["name"].as_str().unwrap()).unwrap();
+                    match handle(tool, &request["params"]["arguments"]) {
+                        Ok(text) => Ok(json!({"content":[{"type":"text","text":text}]})),
                         Err(reason) => Ok(
-                            json!({"isError":true,"content":[{"type":"text","text":format!("Proposal refused ({reason}). Check subject/body and whether this turn is still active.")}]}),
+                            json!({"isError":true,"content":[{"type":"text","text":tool.refusal(reason)}]}),
                         ),
                     }
                 }
@@ -166,7 +260,9 @@ mod tests {
             + &request(4, "tools/call", json!({"name":"send_email","arguments":{}}));
         let mut effects = 0;
         let mut output = Vec::new();
-        serve(wire.as_bytes(), &mut output, |_, _| {
+        serve(wire.as_bytes(), &mut output, |tool, args| {
+            assert_eq!(tool, Tool::ProposeDraft);
+            proposals::validate(args)?;
             effects += 1;
             Ok("synthetic-1".into())
         })
@@ -183,6 +279,70 @@ mod tests {
     }
 
     #[test]
+    fn calendar_tools_route_by_name_and_refusals_say_which_tool() {
+        let request = |id, method, params| {
+            json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}).to_string() + "\n"
+        };
+        let wire = request(1, "initialize", json!({}))
+            + &request(2, "tools/list", json!({}))
+            + &request(
+                3,
+                "tools/call",
+                json!({"name":"read_calendar","arguments":{"from":"2030-03-01"}}),
+            )
+            + &request(
+                4,
+                "tools/call",
+                json!({"name":"propose_event","arguments":{"title":"Dinner","start":"2030-03-05T19:00"}}),
+            )
+            + &request(
+                5,
+                "tools/call",
+                json!({"name":"propose_event","arguments":{"title":"Dinner","start":"2030-03-05T19:00","calendar":"work"}}),
+            )
+            + &request(
+                6,
+                "tools/call",
+                json!({"name":"write_event","arguments":{}}),
+            );
+        let mut calls = Vec::new();
+        let mut output = Vec::new();
+        serve(wire.as_bytes(), &mut output, |tool, args| {
+            if tool == Tool::ProposeEvent {
+                super::super::calendar::validate_proposal(args)?;
+            }
+            calls.push(tool);
+            Ok(format!("{tool:?} ok"))
+        })
+        .unwrap();
+        assert_eq!(calls, [Tool::ReadCalendar, Tool::ProposeEvent]);
+        let responses: Vec<Value> = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let names: Vec<_> = responses[1]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["propose_draft", "read_calendar", "propose_event"]);
+        assert_eq!(
+            responses[2]["result"]["content"][0]["text"],
+            "ReadCalendar ok"
+        );
+        assert_eq!(responses[4]["result"]["isError"], true);
+        assert!(
+            responses[4]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Event suggestion refused")
+        );
+        assert!(responses[5].get("error").is_some());
+    }
+
+    #[test]
     fn oversized_input_is_refused_before_any_effect() {
         let initialize = json!({"jsonrpc":"2.0","id":1,"method":"initialize"}).to_string() + "\n";
         let request = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"propose_draft","arguments":{"subject":"Hello","body":"Text"}},"padding":""}).to_string();
@@ -193,7 +353,8 @@ mod tests {
             assert_eq!(frame.len(), size);
             let wire = initialize.clone() + &frame;
             let mut effects = 0;
-            let result = serve(wire.as_bytes(), Vec::new(), |_, _| {
+            let result = serve(wire.as_bytes(), Vec::new(), |_, args| {
+                proposals::validate(args)?;
                 effects += 1;
                 Ok("synthetic-1".into())
             });

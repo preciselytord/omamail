@@ -261,7 +261,7 @@ args = [{json.dumps(str(forbidden))}]
                 initial = wait(first)
                 self.assertFalse(forbidden.exists(), 'Unrelated configured MCP/plugin must never start')
                 if provider == 'claude':
-                    self.assertTrue(all([tool['name'] for tool in request.get('tools',[])] == ['mcp__omamail__propose_draft'] for request in server.requests))
+                    self.assertTrue(all(sorted(tool['name'] for tool in request.get('tools',[])) == ['mcp__omamail__propose_draft','mcp__omamail__propose_event','mcp__omamail__read_calendar'] for request in server.requests), [sorted(tool['name'] for tool in request.get('tools',[])) for request in server.requests])
                 if provider == 'codex':
                     self.assertNotIn('synthetic-header-secret',(root/'synthetic-cli-argv.json').read_text())
                     self.assertTrue(any(any(key.lower()=='x-synthetic-auth' and value=='synthetic-header-secret' for key,value in headers.items()) for headers in server.headers))
@@ -272,7 +272,7 @@ args = [{json.dumps(str(forbidden))}]
                     for request in server.requests:
                         for tool in request.get('tools',[]):
                             if tool.get('name') == 'mcp__omamail':
-                                self.assertEqual([t['name'] for t in tool['tools']],['propose_draft'])
+                                self.assertEqual([t['name'] for t in tool['tools']],['propose_draft','read_calendar','propose_event'])
                 self.assertEqual(initial['output'],'Synthetic answer مرحبا')
                 self.assertEqual(initial['job']['provider'],provider)
                 self.assertEqual(initial['job']['model'],model)
@@ -296,7 +296,7 @@ args = [{json.dumps(str(forbidden))}]
                     self.assertEqual(call('agent.jobShow',{'id':first})['transcript'],initial['transcript'])
                     self.assertGreaterEqual(len(server.requests),2)
                     if provider == 'opencode':
-                        self.assertTrue(all(not request.get('tools') or [t['function']['name'] for t in request['tools']]==['omamail_propose_draft'] for request in server.requests), 'Only the proposal tool may be exposed')
+                        self.assertTrue(all(not request.get('tools') or sorted(t['function']['name'] for t in request['tools'])==['omamail_propose_draft','omamail_propose_event','omamail_read_calendar'] for request in server.requests), 'Only the proposal and calendar tools may be exposed')
                         systems=[message for request in server.requests for message in request.get('messages',[]) if message.get('role')=='system']
                         self.assertTrue(any("Omamail's mail conversation assistant" in json.dumps(message) for message in systems))
                 finally:

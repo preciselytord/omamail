@@ -18,6 +18,7 @@ Item {
     property string agentShownOutput: ""
     property var agentShownTranscript: []
     property var agentShownProposals: []
+    property var calendarController: calendarStub
     property var sentEnvelope: null
     function send(envelope) { sentEnvelope = envelope; return "synthetic-send" }
     function sendAgentProposal(id, envelope) { return send(envelope) }
@@ -55,6 +56,14 @@ Item {
     function answerAgent(id, prompt, fields) { parentId=id; requestedDraft=fields || null; calls++; if (!accept) return false; agentStarting=true;return true }
     function askAgentMany(ids, prompt, account) { return askAgent(ids[0],prompt,account) }
     function askAgentDraft(fields, prompt) { return askAgent("",prompt,fields.accountId) }
+  }
+  QtObject {
+    id: calendarStub
+    property var writableSourceGroups: [{id:"home"}]
+    property bool composerHeld: false
+    property var prefill: null
+    signal composeRequested(var prefill)
+    onComposeRequested: function(value) { prefill = value }
   }
   QtObject {
     id: deliveryQueue
@@ -136,6 +145,38 @@ Item {
       compare(service.sentEnvelope.body,proposal.body)
       compare(service.sentEnvelope.to,proposal.envelope.to)
       compare(popup.useProposal(proposal,true),false)
+    }
+    function test_event_proposal_opens_the_calendar_composer_and_writes_nothing() {
+      service.jobs=[{id:"chat",messageId:"m1",accountId:service.activeAccountId,state:"done",canContinue:true}]
+      popup.openCenteredFor("m1","Mail")
+      var start=new Date(2030,2,5,19,0).getTime()
+      service.agentShownProposals=[{id:"chat-e0",kind:"event",jobId:"chat",accountId:service.activeAccountId,
+        messageId:"m1",afterTurn:0,title:"Dinner <b>at</b> Bob's",start:"2030-03-05T19:00",end:"",
+        startMs:start,endMs:start+3600000,allDay:false,location:"Home",notes:"",confidence:1}]
+      verify(waitForRendering(popup))
+      var card=findChild(popup,"agent-event-proposal")
+      verify(card!==null)
+      compare(findChild(popup,"agent-draft-proposal"),null)
+      compare(findChild(card,"suggestionHeading").text,"Suggested event")
+      var title=findChild(card,"suggestionTitle")
+      compare(title.textFormat,Text.PlainText)
+      compare(title.text,"Dinner <b>at</b> Bob's")
+      compare(findChild(card,"suggestionDismiss").visible,false)
+      calendarStub.prefill=null
+      calendarStub.composerHeld=true
+      compare(popup.addProposedEvent(card.rows[0]),false)
+      compare(calendarStub.prefill,null)
+      calendarStub.composerHeld=false
+      mouseClick(findChild(card,"suggestionAdd"))
+      verify(calendarStub.prefill!==null)
+      compare(calendarStub.prefill.title,"Dinner <b>at</b> Bob's")
+      compare(calendarStub.prefill.startMs,start)
+      compare(calendarStub.prefill.location,"Home")
+      compare(calendarStub.prefill.accountId,service.activeAccountId)
+      compare(popup.localError,"")
+      var day=new Date(2030,2,6).getTime()
+      verify(popup.addProposedEvent({title:"Holiday",startMs:day,endMs:day+86400000,allDay:true,notes:"",location:""}))
+      compare(calendarStub.prefill.description,"All day.")
     }
     function test_reply_card_keeps_history_out_of_preview_and_adds_it_on_send() {
       service.jobs=[{id:"chat",messageId:"m1",accountId:service.activeAccountId,state:"done",canContinue:true}]

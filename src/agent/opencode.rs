@@ -41,7 +41,7 @@ fn configuration() -> Result<String> {
     let mut configuration = super::config::opencode()?;
     let restricted = json!({"agents":{
         "omamail":{"mode":"primary","system":super::worker::MAIL_ROLE,
-            "permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"omamail_propose_draft","resource":"*","effect":"allow"}]},
+            "permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"omamail_propose_draft","resource":"*","effect":"allow"},{"action":"omamail_read_calendar","resource":"*","effect":"allow"},{"action":"omamail_propose_event","resource":"*","effect":"allow"}]},
         "omamail-events":{"mode":"primary","system":super::worker::MAIL_ROLE,
             "permissions":[{"action":"*","resource":"*","effect":"deny"}]}},
         "snapshots":false,"warming":false,"mcp":{"servers":{"omamail":{"type":"local","command":[exe,"agent-mcp","workspace"],"codemode":false}}}});

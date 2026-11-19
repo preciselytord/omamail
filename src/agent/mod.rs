@@ -1,4 +1,5 @@
 //! Native assistant context, durable jobs, and bounded public-answer streaming.
+mod calendar;
 mod codex;
 mod config;
 pub mod context;

@@ -81,7 +81,8 @@ pub async fn run(id: &str) -> Result<(), &'static str> {
                 text
             } else {
                 format!(
-                    "{MAIL_ROLE}\n\n{INSTRUCTIONS}When the owner asks to create or revise an email draft, call the available propose_draft tool with the complete subject and body. The tool records a proposal for human review; it does not edit or send mail. Do not substitute a plain-text draft for the tool call. For other questions, answer normally.\n\n{text}"
+                    "{MAIL_ROLE}\n\n{INSTRUCTIONS}When the owner asks to create or revise an email draft, call the available propose_draft tool with the complete subject and body. The tool records a proposal for human review; it does not edit or send mail. Do not substitute a plain-text draft for the tool call. {}For other questions, answer normally.\n\n{text}",
+                    super::calendar::instructions()
                 )
             }
         };
@@ -196,10 +197,13 @@ pub async fn run(id: &str) -> Result<(), &'static str> {
         && parser.display()["complete"] == true
     {
         let store = Store::open()?;
-        if store
-            .read_json(id, "proposals.json", super::proposals::MAX_BYTES)?
-            .is_some_and(|v| v.as_array().is_some_and(|a| !a.is_empty()))
-        {
+        let mut proposed = false;
+        for file in ["proposals.json", "event-proposals.json"] {
+            proposed |= store
+                .read_json(id, file, super::proposals::MAX_BYTES)?
+                .is_some_and(|v| v.as_array().is_some_and(|a| !a.is_empty()));
+        }
+        if proposed {
             outcome.failure = None;
         }
     }
